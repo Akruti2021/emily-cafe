@@ -1,37 +1,58 @@
 import argon2 from 'argon2';
 import crypto from 'crypto';
-import { prisma } from '../../config/db';
+import type { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
+import { pool } from '../../config/db';
 import { env } from '../../config/env';
 import { AppError } from '../../middleware/errorhandler';
 import { sendMail } from '../../utils/mailer';
-import { randomToken, sha256, signAccessToken, signRefreshToken, verifyRefreshToken } from '../../utils/tokens';
+import {
+  randomToken,
+  sha256,
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
+} from '../../utils/tokens';
 
-const RESET_MINUTES = 30;
-type User = {
+interface UserRow extends RowDataPacket {
   id: string;
   name: string;
   email: string;
-  passwordHash: string;
+  password_hash: string;
   role: string;
-  isActive: boolean;
+  is_active: number;
+}
+
+interface RefreshTokenRow extends RowDataPacket {
+  id: string;
+  user_id: string;
+  expires_at: Date;
+  revoked_at: Date | null;
+}
+
+const RESET_MINUTES = 30;
+
+const toPublic = (u: { id: string; name: string; email: string; role: string }) => ({
+  id: u.id,
+  name: u.name,
+  email: u.email,
+  role: u.role,
+});
+
+const revokeAllSessions = async (userId: string) => {
+  await pool.query(
+    'UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',
+    [userId],
+  );
 };
-const toPublic = (u: User) => ({ id: u.id, name: u.name, email: u.email, role: u.role });
 
-const revokeAllSessions = (userId: string) =>
-  prisma.refreshToken.updateMany({
-    where: { userId, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
-
-async function issueSession(user: User) {
+async function issueSession(user: { id: string; name: string; email: string; role: string }) {
   const jti = crypto.randomUUID();
-  await prisma.refreshToken.create({
-    data: {
-      id: jti,
-      userId: user.id,
-      expiresAt: new Date(Date.now() + env.REFRESH_DAYS * 864e5),
-    },
-  });
+  const expiresAt = new Date(Date.now() + env.REFRESH_DAYS * 864e5);
+
+  await pool.query(
+    'INSERT INTO refresh_tokens (id, user_id, expires_at) VALUES (?, ?, ?)',
+    [jti, user.id, expiresAt],
+  );
 
   return {
     accessToken: signAccessToken({ sub: user.id, email: user.email, role: user.role }),
@@ -41,32 +62,33 @@ async function issueSession(user: User) {
 }
 
 export async function signup(input: { name: string; email: string; password: string }) {
-  const exists = await prisma.user.findUnique({ where: { email: input.email } });
-  if (exists) throw new AppError(409, 'This email is already registered');
+  const [existing] = await pool.query<UserRow[]>('SELECT id FROM users WHERE email = ?', [input.email]);
+  if (existing.length > 0) throw new AppError(409, 'This email is already registered');
 
-  const user = await prisma.user.create({
-    data: {
-      name: input.name,
-      email: input.email,
-      passwordHash: await argon2.hash(input.password),
-    },
-  });
+  const userId = crypto.randomUUID();
+  const passwordHash = await argon2.hash(input.password);
 
-  return issueSession(user);
+  await pool.query(
+    'INSERT INTO users (id, name, email, password_hash) VALUES (?, ?, ?, ?)',
+    [userId, input.name, input.email, passwordHash],
+  );
+
+  return issueSession({ id: userId, name: input.name, email: input.email, role: 'USER' });
 }
 
 export async function login(email: string, password: string) {
   const invalid = new AppError(401, 'Invalid email or password');
-  const user = await prisma.user.findUnique({ where: { email } });
+  const [rows] = await pool.query<UserRow[]>('SELECT * FROM users WHERE email = ?', [email]);
+  const user = rows[0];
 
   if (!user) {
     await argon2.hash(password);
     throw invalid;
   }
-  if (!user.isActive) throw invalid;
-  if (!(await argon2.verify(user.passwordHash, password))) throw invalid;
+  if (!user.is_active) throw invalid;
+  if (!(await argon2.verify(user.password_hash, password))) throw invalid;
 
-  return issueSession(user);
+  return issueSession({ id: user.id, name: user.name, email: user.email, role: user.role });
 }
 
 export async function refresh(token: string | undefined) {
@@ -79,102 +101,109 @@ export async function refresh(token: string | undefined) {
     throw new AppError(401, 'Invalid or expired refresh token');
   }
 
-  const row = await prisma.refreshToken.findUnique({ where: { id: payload.jti } });
-  if (!row || row.userId !== payload.sub) throw new AppError(401, 'Invalid refresh token');
-  if (row.expiresAt < new Date()) throw new AppError(401, 'Session expired. Please log in again.');
+  const [rows] = await pool.query<RefreshTokenRow[]>('SELECT * FROM refresh_tokens WHERE id = ?', [payload.jti]);
+  const row = rows[0];
 
-  const claimed = await prisma.refreshToken.updateMany({
-    where: { id: row.id, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
+  if (!row || row.user_id !== payload.sub) throw new AppError(401, 'Invalid refresh token');
+  if (new Date(row.expires_at) < new Date()) throw new AppError(401, 'Session expired. Please log in again.');
 
-  if (claimed.count === 0) {
-    await revokeAllSessions(row.userId);
+  const [result] = await pool.query<ResultSetHeader>(
+    'UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ? AND revoked_at IS NULL',
+    [row.id],
+  );
+
+  if (result.affectedRows === 0) {
+    await revokeAllSessions(row.user_id);
     throw new AppError(401, 'Session is no longer valid. Please log in again.');
   }
 
-  const user = await prisma.user.findUnique({ where: { id: row.userId } });
-  if (!user || !user.isActive) throw new AppError(401, 'Account is not available');
+  const [userRows] = await pool.query<UserRow[]>('SELECT * FROM users WHERE id = ?', [row.user_id]);
+  const user = userRows[0];
+  if (!user || !user.is_active) throw new AppError(401, 'Account is not available');
 
-  return issueSession(user);
+  return issueSession({ id: user.id, name: user.name, email: user.email, role: user.role });
 }
 
 export async function logout(token: string | undefined) {
   if (!token) return;
   try {
     const { jti } = verifyRefreshToken(token);
-    await prisma.refreshToken.updateMany({
-      where: { id: jti, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    await pool.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ? AND revoked_at IS NULL', [jti]);
   } catch {}
 }
 
 export const logoutAll = (userId: string) => revokeAllSessions(userId);
 
 export async function me(userId: string) {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user || !user.isActive) throw new AppError(401, 'Account is not available');
+  const [rows] = await pool.query<UserRow[]>('SELECT id, name, email, role, is_active FROM users WHERE id = ?', [userId]);
+  const user = rows[0];
+  if (!user || !user.is_active) throw new AppError(401, 'Account is not available');
   return toPublic(user);
 }
 
 export async function changePassword(userId: string, currentPassword: string, newPassword: string) {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  const [rows] = await pool.query<UserRow[]>('SELECT * FROM users WHERE id = ?', [userId]);
+  const user = rows[0];
+  if (!user) throw new AppError(404, 'User not found');
 
-  if (!(await argon2.verify(user.passwordHash, currentPassword))) {
+  if (!(await argon2.verify(user.password_hash, currentPassword))) {
     throw new AppError(400, 'Current password is incorrect');
   }
   if (currentPassword === newPassword) {
-    throw new AppError(400, 'New password must be different from the current one');
+    throw new AppError(400, 'New password must be different from current');
   }
 
-  const updated = await prisma.user.update({
-    where: { id: userId },
-    data: { passwordHash: await argon2.hash(newPassword) },
-  });
-
+  const newHash = await argon2.hash(newPassword);
+  await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, userId]);
   await revokeAllSessions(userId);
-  return issueSession(updated);
+
+  return issueSession({ id: user.id, name: user.name, email: user.email, role: user.role });
 }
 
 export async function forgotPassword(email: string) {
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user || !user.isActive) return;
+  const [rows] = await pool.query<UserRow[]>('SELECT * FROM users WHERE email = ?', [email]);
+  const user = rows[0];
+  if (!user || !user.is_active) return;
 
-  await prisma.passwordReset.updateMany({
-    where: { userId: user.id, usedAt: null },
-    data: { usedAt: new Date() },
-  });
+  await pool.query('UPDATE password_resets SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL', [user.id]);
 
   const token = randomToken();
-  await prisma.passwordReset.create({
-    data: {
-      userId: user.id,
-      tokenHash: sha256(token),
-      expiresAt: new Date(Date.now() + RESET_MINUTES * 60_000),
-    },
-  });
+  const resetId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + RESET_MINUTES * 60_000);
+
+  await pool.query(
+    'INSERT INTO password_resets (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)',
+    [resetId, user.id, sha256(token), expiresAt],
+  );
 
   await sendMail(
     user.email,
     'Reset your password',
-    `Hello ${user.name},\n\nSet a new password here (valid for ${RESET_MINUTES} minutes):\n${env.CLIENT_URL}/reset-password?token=${token}\n\nIf you did not request this, ignore this email.`,
+    `Hello ${user.name},\n\nSet a new password here (valid for ${RESET_MINUTES} minutes):\n${env.CLIENT_URL}/reset-password?token=${token}`,
   );
 }
 
 export async function resetPassword(token: string, newPassword: string) {
-  const row = await prisma.passwordReset.findUnique({ where: { tokenHash: sha256(token) } });
-  if (!row || row.usedAt || row.expiresAt < new Date()) {
+  const [rows] = await pool.query<RowDataPacket[]>('SELECT * FROM password_resets WHERE token_hash = ?', [sha256(token)]);
+  const row = rows[0];
+
+  if (!row || row.used_at || new Date(row.expires_at) < new Date()) {
     throw new AppError(400, 'This reset link is invalid or has expired');
   }
 
   const passwordHash = await argon2.hash(newPassword);
-  await prisma.$transaction([
-    prisma.user.update({ where: { id: row.userId }, data: { passwordHash } }),
-    prisma.passwordReset.update({ where: { id: row.id }, data: { usedAt: new Date() } }),
-    prisma.refreshToken.updateMany({
-      where: { userId: row.userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    }),
-  ]);
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.query('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, row.user_id]);
+    await connection.query('UPDATE password_resets SET used_at = NOW() WHERE id = ?', [row.id]);
+    await connection.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL', [row.user_id]);
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 }
