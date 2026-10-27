@@ -19,6 +19,7 @@ interface AuthContextValue {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (name: string, email: string, password: string) => Promise<void>;
+  establishSession: (session: SessionResponse) => void;
   logout: () => Promise<void>;
   logoutAll: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
@@ -93,7 +94,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, signup, logout, logoutAll, changePassword }}>
+    <AuthContext.Provider value={{
+      user,
+      loading,
+      login,
+      signup,
+      establishSession: applySession,
+      logout,
+      logoutAll,
+      changePassword,
+    }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,13 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../auth/AuthContext';
+import { api, getErrorMessage } from '../api/client';
 import {
   Activity,
-  ArrowDownToLine,
-  ArrowUpRight,
   BarChart3,
   Bell,
   Box,
@@ -40,7 +39,6 @@ const navItems = [
   { label: 'Messages', icon: MessageSquare, badge: '12', href: '#messages' },
 ];
 
-const bars = [42, 58, 48, 72, 55, 81, 65, 92, 68, 83, 76, 96];
 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -161,36 +159,51 @@ function StatCard({
       <p className="mt-5 text-[25px] font-semibold tracking-[-.03em] text-[#2e2925]">{value}</p>
       <div className="mt-3 flex items-center gap-1.5 text-[10px] font-semibold">
         <span className={`rounded-md px-1.5 py-1 ${badgeTone}`}>{badge}</span>
-        <span className="text-[#aaa29a]">vs last month</span>
       </div>
     </div>
   );
 }
 
-function RevenueChart() {
+function RevenueChart({ monthlyTotals, loading, error }: {
+  monthlyTotals: number[];
+  loading: boolean;
+  error: string;
+}) {
+  const highestTotal = Math.max(...monthlyTotals, 0);
+
   return (
     <section className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)] lg:col-span-2">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-[15px] font-semibold text-[#302a26]">Total Revenue</h2>
-          <p className="mt-1 text-[11px] text-[#aaa29a]">Monthly revenue overview</p>
+          <h2 className="text-[15px] font-semibold text-[#302a26]">Recorded order totals</h2>
+          <p className="mt-1 text-[11px] text-[#aaa29a]">Monthly totals across all order statuses</p>
         </div>
         <button aria-label="Chart settings" className="text-[#aaa29a]">
           <MoreHorizontal size={18} />
         </button>
       </div>
       <div className="mt-7 flex h-[170px] items-end gap-2.5 sm:gap-4">
-        {bars.map((height, i) => (
-          <div key={months[i]} className="flex h-full flex-1 flex-col items-center justify-end gap-2">
-            <div
-              className={`w-full max-w-[18px] rounded-t-md ${
-                i === 7 || i === 11 ? 'bg-[#2563eb]' : 'bg-[#bfdbfe]'
-              }`}
-              style={{ height: `${height}%` }}
-            />
-            <span className="text-[9px] text-[#aaa29a]">{months[i]}</span>
-          </div>
-        ))}
+        {loading ? (
+          <p className="mb-8 w-full text-center text-xs text-[#aaa29a]">Loading monthly totals...</p>
+        ) : error ? (
+          <p role="alert" className="mb-8 w-full text-center text-xs text-red-500">Monthly totals could not be loaded.</p>
+        ) : months.map((month, index) => {
+          const total = monthlyTotals[index] ?? 0;
+          const height = highestTotal > 0 ? (total / highestTotal) * 100 : 0;
+          const formattedTotal = total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+          return (
+            <div key={month} className="flex h-full flex-1 flex-col items-center justify-end gap-2" title={`${month}: ${formattedTotal}`}>
+              <div
+                className={`w-full max-w-[18px] rounded-t-md ${
+                  total === highestTotal && highestTotal > 0 ? 'bg-[#2563eb]' : 'bg-[#bfdbfe]'
+                }`}
+                style={{ height: `${height}%` }}
+              />
+              <span className="text-[9px] text-[#aaa29a]">{month}</span>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -206,35 +219,17 @@ function Performance() {
         </div>
         <MoreHorizontal size={18} className="text-[#aaa29a]" />
       </div>
-      <div
-        className="relative mx-auto mt-7 size-[145px] rounded-full"
-        style={{
-          background: 'conic-gradient(from 270deg, #2563eb 0deg 265deg, #dbeafe 265deg 360deg)',
-        }}
-      >
-        <div className="absolute inset-[13px] flex flex-col items-center justify-center rounded-full bg-white">
-          <span className="text-[10px] text-[#aaa29a]">Total count</span>
-          <strong className="mt-1 text-[23px] font-semibold text-[#302a26]">2,375</strong>
-        </div>
-      </div>
-      <p className="mx-auto mt-4 max-w-[205px] text-center text-[11px] leading-4 text-[#928b84]">
-        Keep your info updated to increase the number of interactions.
-      </p>
-      <div className="mt-5 flex justify-center gap-5 text-[10px] text-[#817a74]">
-        <span>
-          <i className="mr-1.5 inline-block size-2 rounded-full bg-[#2563eb]" />
-          View Count
-        </span>
-        <span>
-          <i className="mr-1.5 inline-block size-2 rounded-full bg-[#dbeafe]" />
-          Percentage
-        </span>
+      <div className="mt-7 flex h-[145px] items-center justify-center rounded-xl bg-[#f8fafc] px-5 text-center text-xs leading-5 text-[#928b84]">
+        Performance data is unavailable because interactions are not recorded yet.
       </div>
     </section>
   );
 }
-
-function Station() {
+function Station({ stats, loading, error }: {
+  stats: DashboardStats | null;
+  loading: boolean;
+  error: string;
+}) {
   return (
     <section className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)]">
       <div className="flex items-center justify-between">
@@ -248,38 +243,53 @@ function Station() {
       </div>
       <div className="mt-7 grid grid-cols-3 gap-2">
         <div className="rounded-xl bg-[#2563eb] p-3 text-white">
-          <strong className="text-xl font-semibold">28</strong>
+          <strong className="text-xl font-semibold">{loading ? '…' : error ? '—' : stats!.todayOrderCount.toLocaleString()}</strong>
           <p className="mt-1 text-[10px] opacity-75">Today's order</p>
         </div>
         <div className="rounded-xl bg-[#dbeafe] p-3 text-[#1d4ed8]">
-          <strong className="text-xl font-semibold">24</strong>
+          <strong className="text-xl font-semibold">{loading ? '…' : error ? '—' : stats!.todayCompletedOrderCount.toLocaleString()}</strong>
           <p className="mt-1 text-[10px] opacity-75">Completed</p>
         </div>
         <div className="rounded-xl bg-[#f4f0ed] p-3 text-[#8b8179]">
-          <strong className="text-xl font-semibold">04</strong>
+          <strong className="text-xl font-semibold">{loading ? '…' : error ? '—' : stats!.todayPendingOrderCount.toLocaleString()}</strong>
           <p className="mt-1 text-[10px] opacity-75">Pending</p>
         </div>
       </div>
-      <div className="mt-8 rounded-lg bg-[#f8fafc] p-3">
-        <div className="flex items-center justify-between text-[10px] text-[#928b84]">
-          <span>Weekly goal</span>
-          <span className="font-semibold text-[#2563eb]">78%</span>
-        </div>
-        <div className="mt-2 h-1.5 rounded-full bg-[#dbeafe]">
-          <div className="h-full w-[78%] rounded-full bg-[#2563eb]" />
-        </div>
+      <div className="mt-8 rounded-lg bg-[#f8fafc] p-3 text-[10px] text-[#928b84]">
+        Today's total includes orders in every status.
       </div>
     </section>
   );
 }
 
-const orders = [
-  { title: 'Chicken Salad', price: '$24.00', date: 'Sep 22, 2024', status: 'Pending' },
-  { title: 'Caesar Noodles', price: '$18.50', date: 'Sep 21, 2024', status: 'Complete' },
-  { title: 'Stir Noodles', price: '$16.00', date: 'Sep 20, 2024', status: 'Complete' },
-];
+type RecentOrder = {
+  id: string;
+  title: string;
+  status: string;
+  grandTotal: number;
+  createdAt: string;
+};
 
-function RecentOrders() {
+type DashboardStats = {
+  activeDishCount: number;
+  totalOrderCount: number;
+  recordedOrderTotal: number;
+  todayOrderCount: number;
+  todayCompletedOrderCount: number;
+  todayPendingOrderCount: number;
+  monthlyRecordedOrderTotals: Array<{ month: number; total: number }>;
+  profit: null;
+};
+
+function formatOrderStatus(status: string) {
+  return status.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function RecentOrders({ orders, loading, error }: {
+  orders: RecentOrder[];
+  loading: boolean;
+  error: string;
+}) {
   return (
     <section className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)] lg:col-span-2">
       <div className="flex items-center justify-between">
@@ -294,39 +304,98 @@ function RecentOrders() {
         </div>
       </div>
       <div className="mt-5 flex flex-col gap-3">
-        {orders.map((order) => (
-          <div key={order.title} className="flex items-center gap-3 rounded-xl bg-[#fdfbf8] p-2.5">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[#eff6ff] text-[#2563eb]">
-              <Utensils size={18} />
+        {loading ? (
+          <p className="py-4 text-center text-xs text-[#aaa29a]">Loading recent orders...</p>
+        ) : error ? (
+          <p role="alert" className="py-4 text-center text-xs text-red-500">{error}</p>
+        ) : orders.length === 0 ? (
+          <p className="py-4 text-center text-xs text-[#aaa29a]">No recent orders yet.</p>
+        ) : orders.map((order) => {
+          const status = order.status.toUpperCase();
+          const statusTone = status === 'COMPLETED'
+            ? 'bg-[#e5f4e8] text-[#4b9a67]'
+            : status === 'PENDING'
+              ? 'bg-[#fff0d8] text-[#be8740]'
+              : 'bg-[#f1ebe5] text-[#817a74]';
+
+          return (
+            <div key={order.id} className="flex items-center gap-3 rounded-xl bg-[#fdfbf8] p-2.5">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[#eff6ff] text-[#2563eb]">
+                <Utensils size={18} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[12px] font-semibold text-[#443b35]">{order.title}</p>
+                <p className="mt-1 text-[10px] text-[#aaa29a]">
+                  {new Date(order.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[12px] font-semibold text-[#443b35]">
+                  {order.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                <span className={`mt-1 inline-block rounded-md px-1.5 py-1 text-[9px] font-semibold ${statusTone}`}>
+                  {formatOrderStatus(order.status)}
+                </span>
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[12px] font-semibold text-[#443b35]">{order.title}</p>
-              <p className="mt-1 text-[10px] text-[#aaa29a]">{order.date}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[12px] font-semibold text-[#443b35]">{order.price}</p>
-              <span
-                className={`mt-1 inline-block rounded-md px-1.5 py-1 text-[9px] font-semibold ${
-                  order.status === 'Pending'
-                    ? 'bg-[#fff0d8] text-[#be8740]'
-                    : 'bg-[#e5f4e8] text-[#4b9a67]'
-                }`}
-              >
-                {order.status}
-              </span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
 }
-
 export default function RestaurantDashboard() {
   const { user, logout } = useAuth();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('Items');
+  const [orders, setOrders] = useState<RecentOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [ordersError, setOrdersError] = useState('');
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+
+    api.get<DashboardStats>('/dashboard/stats')
+      .then(({ data }) => {
+        if (active) setStats(data);
+      })
+      .catch((err: unknown) => {
+        if (active) setStatsError(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (active) setStatsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const branchId = window.localStorage.getItem('active_branch_id');
+
+    api.get<RecentOrder[]>('/orders/recent', {
+      params: branchId ? { branchId } : undefined,
+    })
+      .then(({ data }) => {
+        if (active) setOrders(data);
+      })
+      .catch((err: unknown) => {
+        if (active) setOrdersError(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (active) setOrdersLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const initials = user?.name
     ? user.name
@@ -454,108 +523,83 @@ export default function RestaurantDashboard() {
             </div>
 
             {/* Stat Cards */}
+            {statsError && (
+              <p role="alert" className="mt-4 text-xs text-red-500">
+                Dashboard statistics could not be loaded: {statsError}
+              </p>
+            )}
             <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <StatCard
-                title="Available dish"
-                value="150.00"
+                title="Available dishes"
+                value={statsLoading ? 'Loading…' : statsError ? '—' : stats!.activeDishCount.toLocaleString()}
                 icon={Utensils}
                 tone="bg-[#fff0e8] text-[#2563eb]"
-                badge="+ 24 New add"
+                badge="Active items"
                 badgeTone="bg-[#fff0e8] text-[#2563eb]"
               />
               <StatCard
                 title="Total order"
-                value="11,000"
+                value={statsLoading ? 'Loading…' : statsError ? '—' : stats!.totalOrderCount.toLocaleString()}
                 icon={Box}
                 tone="bg-[#f0eafa] text-[#8f70c1]"
-                badge="&nearr; 60% Done"
+                badge="All statuses"
                 badgeTone="bg-[#f0eafa] text-[#8f70c1]"
               />
               <StatCard
-                title="Total sale"
-                value="$277,000"
+                title="Recorded order total"
+                value={statsLoading
+                  ? 'Loading…'
+                  : statsError
+                    ? '—'
+                    : stats!.recordedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 icon={Activity}
                 tone="bg-[#eaf3fb] text-[#659bc7]"
-                badge="&nearr; 7.8% Growth"
+                badge="Recorded totals"
                 badgeTone="bg-[#eaf3fb] text-[#659bc7]"
               />
               <StatCard
                 title="Total profit"
-                value="$35,000"
+                value="N/A"
                 icon={TrendingUp}
                 tone="bg-[#e8f5eb] text-[#66a77a]"
-                badge="&uarr; 4.8% Increase"
+                badge="Cost data unavailable"
                 badgeTone="bg-[#e8f5eb] text-[#66a77a]"
               />
             </div>
 
             {/* Mid Grid */}
             <div className="mt-4 grid gap-4 xl:grid-cols-4">
-              <RevenueChart />
+              <RevenueChart
+                monthlyTotals={stats?.monthlyRecordedOrderTotals.map(({ total }) => total) ?? []}
+                loading={statsLoading}
+                error={statsError}
+              />
               <Performance />
-              <Station />
+              <Station stats={stats} loading={statsLoading} error={statsError} />
             </div>
 
             {/* Bottom Grid */}
             <div className="mt-4 grid gap-4 xl:grid-cols-4">
-              <section className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)]">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-[15px] font-semibold text-[#302a26]">Last reports</h2>
-                  <button className="text-[10px] font-semibold text-[#2563eb]">See all</button>
+              <section id="reports" className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)]">
+                <h2 className="text-[15px] font-semibold text-[#302a26]">Reports</h2>
+                <div className="mt-5 rounded-xl bg-[#f8fafc] p-4 text-xs leading-5 text-[#928b84]">
+                  No reports have been generated yet. Report creation and downloads are not available yet.
                 </div>
-                <div className="mt-5 flex items-center gap-3 rounded-xl bg-[#fdf7f3] p-3">
-                  <div className="flex size-9 items-center justify-center rounded-lg bg-white text-[#2563eb]">
-                    <FileText size={17} />
-                  </div>
-                  <div>
-                    <p className="text-[11px] font-semibold text-[#443b35]">October Report</p>
-                    <p className="mt-1 text-[10px] text-[#aaa29a]">PDF &middot; 2.4 MB</p>
-                  </div>
-                </div>
-                <button className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#e5cfc2] text-[11px] font-semibold text-[#b28a78] hover:bg-[#fffaf6]">
-                  <span className="text-base">+</span>Create new
-                </button>
-                <button className="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#2563eb] text-[11px] font-semibold text-white hover:bg-[#1d4ed8]">
-                  <ArrowDownToLine size={14} />
-                  Download PDF
-                </button>
               </section>
 
-              <section className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)]">
+              <section id="customers" className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)]">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-[15px] font-semibold text-[#302a26]">Your customer</h2>
+                    <h2 className="text-[15px] font-semibold text-[#302a26]">Customers</h2>
                     <p className="mt-1 text-[11px] text-[#aaa29a]">Customer source breakdown</p>
                   </div>
                   <MoreHorizontal size={18} className="text-[#aaa29a]" />
                 </div>
-                <div className="mt-8 flex items-end justify-between">
-                  <div>
-                    <p className="text-[24px] font-semibold text-[#302a26]">9,160</p>
-                    <p className="mt-1 text-[10px] text-[#aaa29a]">Total customers</p>
-                  </div>
-                  <ArrowUpRight size={17} className="mb-1 text-[#62a775]" />
+                <div className="mt-5 flex min-h-[112px] items-center justify-center rounded-xl bg-[#f8fafc] px-5 text-center text-xs leading-5 text-[#928b84]">
+                  Customer profiles and order source are not recorded in the current data model.
                 </div>
-                <div className="mt-6 flex h-3 overflow-hidden rounded-full bg-[#f1ebe5]">
-                  <div className="w-[41%] bg-[#2563eb]" />
-                  <div className="w-[59%] bg-[#f3c4b4]" />
-                </div>
-                <div className="mt-4 flex justify-between text-[10px] text-[#817a74]">
-                  <span>
-                    <i className="mr-1.5 inline-block size-2 rounded-full bg-[#2563eb]" />
-                    Online <b className="ml-1 text-[#443b35]">3,750</b>
-                  </span>
-                  <span>
-                    <i className="mr-1.5 inline-block size-2 rounded-full bg-[#f3c4b4]" />
-                    In shop <b className="ml-1 text-[#443b35]">5,410</b>
-                  </span>
-                </div>
-                <button className="mt-7 text-[11px] font-semibold text-[#2563eb]">
-                  View more &rarr;
-                </button>
               </section>
-
-              <RecentOrders />
+              <RecentOrders orders={orders} loading={ordersLoading} error={ordersError} />
             </div>
           </div>
         </div>
