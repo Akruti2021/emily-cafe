@@ -5,7 +5,10 @@ import cookieParser from 'cookie-parser';
 import { env } from './config/env';
 import { errorHandler } from './middleware/errorhandler';
 import { authRouter } from './modules/auth/auth.routes';
-import { orgRouter } from './modules/organization/org.routes'; // <-- 1. Import this
+import { orgRouter } from './modules/organization/org.routes';
+import { menuRouter } from './modules/menu/menu.routes';
+import { ordersRouter } from './modules/orders/orders.routes';
+import { dashboardRouter } from './modules/dashboard/dashboard.routes';
 
 export const app = express();
 
@@ -17,7 +20,10 @@ app.use(cookieParser());
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRouter);
-app.use('/api/org', orgRouter); // <-- 2. Mount this
+app.use('/api/org', orgRouter);
+app.use('/api/menu', menuRouter);
+app.use('/api/orders', ordersRouter);
+app.use('/api/dashboard', dashboardRouter);
 
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(errorHandler);

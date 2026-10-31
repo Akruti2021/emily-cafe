@@ -43,7 +43,7 @@ export async function registerRestaurantOnboarding(input: {
     const passwordHash = await argon2.hash(input.password);
 
     await connection.query(
-      'INSERT INTO users (id, name, email, phone, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (id, name, email, mobile_number, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)',
       [userId, input.fullName, input.email, input.phone ?? null, passwordHash, 'OWNER'],
     );
 

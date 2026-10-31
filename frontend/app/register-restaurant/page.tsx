@@ -3,10 +3,12 @@
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api, getErrorMessage, setAccessToken } from '../../src/api/client';
+import { useAuth } from '../../src/auth/AuthContext';
+import { api, getErrorMessage } from '../../src/api/client';
 
 export default function RegisterRestaurantPage() {
   const router = useRouter();
+  const { establishSession } = useAuth();
   const [restaurantName, setRestaurantName] = useState('');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -31,11 +33,11 @@ export default function RegisterRestaurantPage() {
         password,
       });
 
-      setAccessToken(data.accessToken);
+      establishSession({ accessToken: data.accessToken, user: data.user });
       if (typeof window !== 'undefined') {
         localStorage.setItem('active_restaurant_id', data.restaurant.id);
       }
-      router.push('/dashboard');
+      router.push(`/branch-details?restaurantId=${encodeURIComponent(data.restaurant.id)}`);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
