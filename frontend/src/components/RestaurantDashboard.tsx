@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../auth/AuthContext';
+import { usePathname } from 'next/navigation';
 import {
   Activity,
   ArrowDownToLine,
@@ -29,6 +30,10 @@ import {
   Users,
   Utensils,
   X,
+  UtensilsCrossed, // or your preferred table icon
+  Layers,
+  TableProperties,
+  QrCode,
 } from 'lucide-react';
 
 const navItems = [
@@ -323,6 +328,10 @@ function RecentOrders() {
 }
 
 export default function RestaurantDashboard() {
+  const pathname = usePathname();
+  const [tablesOpen, setTablesOpen] = useState(
+    pathname?.startsWith('/dashboard/tables') || pathname?.startsWith('/tables') || false
+  );
   const { user, logout } = useAuth();
   const router = useRouter();
   const [open, setOpen] = useState(false);

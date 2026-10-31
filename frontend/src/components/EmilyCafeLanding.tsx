@@ -46,8 +46,35 @@ export default function Page() {
   const filteredMeals = useMemo(() => meals.filter((meal) => (activeCategory === 'All' || meal.category === activeCategory) && meal.name.toLowerCase().includes(query.toLowerCase())), [activeCategory, query])
 
   return <main>
-    <header className="site-header"><div className="nav-wrap"><Logo /><nav className="desktop-nav" aria-label="Primary navigation"><a className="active" href="#home">Home</a><a href="#meals">Order</a><a href="#booking">Book</a><a href="#features">Catering</a><a href="#footer">Login</a><a href="#meals">Cart <span className="cart-dot">2</span></a></nav><button className="mobile-trigger" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Toggle menu">{mobileOpen ? <X /> : <Menu />}</button></div>{mobileOpen && <nav className="mobile-nav"><a href="#home" onClick={() => setMobileOpen(false)}>Home</a><a href="#meals">Order</a><a href="#booking">Book</a><a href="#features">Catering</a><a href="#footer">Login</a><a href="#meals">Cart <span className="cart-dot">2</span></a></nav>}</header>
+    {/* <header className="site-header"><div className="nav-wrap"><Logo /><nav className="desktop-nav" aria-label="Primary navigation"><a className="active" href="#home">Home</a><a href="#meals">Order</a><a href="#booking">Book</a><a href="#features">Catering</a><Link href="/login">Login</Link><a href="#meals">Cart <span className="cart-dot">2</span></a></nav><button className="mobile-trigger" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Toggle menu">{mobileOpen ? <X /> : <Menu />}</button></div>{mobileOpen && <nav className="mobile-nav"><a href="#home" onClick={() => setMobileOpen(false)}>Home</a><a href="#meals">Order</a><a href="#booking">Book</a><a href="#features">Catering</a><Link href="#/login">Login</Link><a href="#meals">Cart <span className="cart-dot">2</span></a></nav>}</header> */}
 
+    <header className="site-header">
+      <div className="nav-wrap">
+        <Logo />
+        <nav className="desktop-nav" aria-label="Primary navigation">
+          <a className="active" href="#home">Home</a>
+          <a href="#meals">Order</a>
+          <a href="#booking">Book</a>
+          <a href="#features">Catering</a>
+          <Link href="/login">Login</Link>
+          <a href="#meals">Cart <span className="cart-dot">2</span></a>
+        </nav>
+        <button className="mobile-trigger" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Toggle menu">
+          {mobileOpen ? <X /> : <Menu />}
+        </button>
+      </div>
+      {mobileOpen && (
+        <nav className="mobile-nav">
+          <a href="#home" onClick={() => setMobileOpen(false)}>Home</a>
+          <a href="#meals">Order</a>
+          <a href="#booking">Book</a>
+          <a href="#features">Catering</a>
+          <Link href="/login" onClick={() => setMobileOpen(false)}>Login</Link>
+          <a href="#meals">Cart <span className="cart-dot">2</span></a>
+        </nav>
+      )}
+    </header>
+    
     <section className="hero" id="home"><div className="hero-copy"><p className="eyebrow"><Sparkles size={15} /> GOOD FOOD, GOOD MOOD</p><h1>Find your food<br /><em>delivered fresh</em><br />&amp; hot.</h1><p className="hero-text">From our kitchen to your doorstep, discover comforting flavors, warm service, and little moments worth savoring.</p><div className="location-search"><Search size={20} /><input aria-label="Find nearest food" placeholder="Find nearest food here" /><button>Set location <ChevronDown size={16} /></button></div><div className="hero-stats"><span><strong>4.9/5</strong><small>Guest rating</small></span><span><strong>20 min</strong><small>Average delivery</small></span><span><strong>100%</strong><small>Made fresh</small></span></div></div><div className="hero-art"><div className="art-glow" /><img className="hero-food-image" src="https://images.unsplash.com/photo-1579871494447-9811cf80d66c?auto=format&fit=crop&w=1100&q=90" alt="Fresh salmon sushi bowl with avocado and vegetables" /><div className="ingredient ingredient-one">🥒</div><div className="ingredient ingredient-two">🥕</div><div className="ingredient ingredient-three">✦</div><div className="chopstick stick-one" /><div className="chopstick stick-two" /><div className="hero-badge"><Star fill="currentColor" size={14} /><span>Chef&apos;s pick<small>Fresh every day</small></span></div></div></section>
 
     <section className="section features" id="features"><div className="section-heading centered"><p className="eyebrow">WHY EMILY CAFE</p><h2>Made for your <em>good days.</em></h2><p>Whatever the occasion, we bring a little more joy to the table.</p></div><div className="feature-grid"><Feature icon={<Truck />} title="Fast Delivery" text="Hot, fresh, and at your door before you can say seconds." /><Feature icon={<Utensils />} title="Catering" text="Thoughtful menus and generous servings for every gathering." /><Feature icon={<Table2 />} title="Book a Table" text="Reserve your favorite spot and make tonight feel special." action={() => setBookingOpen(true)} /></div></section>
