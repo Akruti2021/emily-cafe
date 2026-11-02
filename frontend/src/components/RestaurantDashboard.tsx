@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '../auth/AuthContext';
+import { api, getErrorMessage } from '../api/client';
 import {
   Activity,
   BarChart3,
@@ -35,6 +36,7 @@ import {
 
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
+  { label: 'Menu Management', icon: UtensilsCrossed, href: '/menu' },
   { label: 'Analytics', icon: BarChart3, href: '#analytics' },
   { label: 'Order', icon: ShoppingBag, href: '#orders' },
   { label: 'Customer', icon: Users, href: '#customers' },
