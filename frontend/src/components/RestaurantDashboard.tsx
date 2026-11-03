@@ -46,7 +46,19 @@ const navItems = [
 
 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+function Sidebar({
+  open,
+  onClose,
+  pathname,
+  tablesOpen,
+  onToggleTables,
+}: {
+  open: boolean;
+  onClose: () => void;
+  pathname: string | null;
+  tablesOpen: boolean;
+  onToggleTables: () => void;
+}) {
   return (
     <>
       {open && (
@@ -75,7 +87,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           </button>
         </div>
 
-        <nav className="flex-1">
+        <nav className="min-h-0 flex-1 overflow-y-auto pr-1">
           <p className="mb-4 px-3 text-[10px] font-semibold uppercase tracking-[.18em] text-[#aaa29a]">
             Menu
           </p>
@@ -99,6 +111,51 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
                 )}
               </Link>
             ))}
+            <button
+              type="button"
+              aria-expanded={tablesOpen}
+              aria-controls="tables-navigation"
+              onClick={onToggleTables}
+              className={`flex h-11 items-center gap-3 rounded-xl px-3 text-left text-[13px] font-medium transition-colors ${
+                pathname?.startsWith('/dashboard/tables')
+                  ? 'bg-[#eff6ff] text-[#2563eb]'
+                  : 'text-[#817a74] hover:bg-[#f1f5f9]'
+              }`}
+            >
+              <TableProperties size={17} strokeWidth={1.8} />
+              <span>Tables</span>
+              <ChevronDown
+                size={15}
+                className={`ml-auto transition-transform ${tablesOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+            {tablesOpen && (
+              <div id="tables-navigation" className="ml-5 flex flex-col gap-1 border-l border-[#eee8df] pl-3">
+                {[
+                  { label: 'Areas', href: '/dashboard/tables/areas', icon: Layers },
+                  { label: 'Tables', href: '/dashboard/tables', icon: TableProperties },
+                  { label: 'QR Codes', href: '/dashboard/tables/qr-code', icon: QrCode },
+                ].map(({ label, href, icon: Icon }) => {
+                  const active = pathname === href;
+                  return (
+                    <Link
+                      key={href}
+                      href={href}
+                      aria-current={active ? 'page' : undefined}
+                      onClick={onClose}
+                      className={`flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-xs font-medium transition-colors ${
+                        active
+                          ? 'bg-[#eff6ff] text-[#2563eb]'
+                          : 'text-[#817a74] hover:bg-[#f1f5f9]'
+                      }`}
+                    >
+                      <Icon size={15} strokeWidth={1.8} />
+                      <span>{label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <p className="mb-4 mt-10 px-3 text-[10px] font-semibold uppercase tracking-[.18em] text-[#aaa29a]">
@@ -269,11 +326,16 @@ function Station({ stats, loading, error }: {
 
 type RecentOrder = {
   id: string;
+  orderNumber: string;
+  tableNumber: string | null;
   title: string;
   status: string;
   grandTotal: number;
   createdAt: string;
 };
+
+type OrderStatusFilter = 'ALL' | 'PENDING' | 'PREPARING' | 'READY' | 'COMPLETED' | 'CANCELLED';
+const orderPageSize = 25;
 
 type DashboardStats = {
   activeDishCount: number;
@@ -290,38 +352,67 @@ function formatOrderStatus(status: string) {
   return status.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function RecentOrders({ orders, loading, error }: {
+function RecentOrders({ orders, loading, error, updatingOrderId, onStatusChange, statusFilter, onStatusFilterChange, total, page, onPageChange }: {
   orders: RecentOrder[];
   loading: boolean;
   error: string;
+  updatingOrderId: string | null;
+  onStatusChange: (orderId: string, status: 'PREPARING' | 'READY' | 'COMPLETED' | 'CANCELLED') => void;
+  statusFilter: OrderStatusFilter;
+  onStatusFilterChange: (status: OrderStatusFilter) => void;
+  total: number;
+  page: number;
+  onPageChange: (page: number) => void;
 }) {
   return (
-    <section className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)] lg:col-span-2">
-      <div className="flex items-center justify-between">
-        <h2 className="text-[15px] font-semibold text-[#302a26]">Recent order</h2>
-        <div className="flex gap-1">
-          <button aria-label="Previous order" className="rounded-md border border-[#eee8df] p-1 text-[#aaa29a]">
-            <ChevronLeft size={14} />
-          </button>
-          <button aria-label="Next order" className="rounded-md border border-[#eee8df] p-1 text-[#aaa29a]">
-            <ChevronRight size={14} />
-          </button>
+    <section id="orders" className="rounded-2xl border border-[#eee8df] bg-white p-5 shadow-[0_2px_12px_rgba(72,45,25,.025)] lg:col-span-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-[15px] font-semibold text-[#302a26]">Orders</h2>
+          <p className="mt-1 text-[11px] text-[#aaa29a]">{total} orders</p>
         </div>
+        <label className="flex items-center gap-2 text-[11px] font-medium text-[#817a74]">
+          Status
+          <select
+            aria-label="Filter orders by status"
+            value={statusFilter}
+            onChange={(event) => onStatusFilterChange(event.target.value as OrderStatusFilter)}
+            className="rounded-lg border border-[#eee8df] bg-white px-2.5 py-2 text-xs text-[#443b35] outline-none focus:border-[#8bb6ff]"
+          >
+            <option value="ALL">All statuses</option>
+            <option value="PENDING">Pending</option>
+            <option value="PREPARING">Preparing</option>
+            <option value="READY">Ready</option>
+            <option value="COMPLETED">Completed</option>
+            <option value="CANCELLED">Cancelled</option>
+          </select>
+        </label>
       </div>
       <div className="mt-5 flex flex-col gap-3">
         {loading ? (
-          <p className="py-4 text-center text-xs text-[#aaa29a]">Loading recent orders...</p>
+          <p className="py-4 text-center text-xs text-[#aaa29a]">Loading orders...</p>
         ) : error ? (
           <p role="alert" className="py-4 text-center text-xs text-red-500">{error}</p>
         ) : orders.length === 0 ? (
-          <p className="py-4 text-center text-xs text-[#aaa29a]">No recent orders yet.</p>
+          <p className="py-4 text-center text-xs text-[#aaa29a]">
+            {statusFilter === 'ALL' ? 'No orders yet.' : 'No orders match this status.'}
+          </p>
         ) : orders.map((order) => {
           const status = order.status.toUpperCase();
           const statusTone = status === 'COMPLETED'
             ? 'bg-[#e5f4e8] text-[#4b9a67]'
             : status === 'PENDING'
               ? 'bg-[#fff0d8] text-[#be8740]'
-              : 'bg-[#f1ebe5] text-[#817a74]';
+              : status === 'READY'
+                ? 'bg-[#eff6ff] text-[#2563eb]'
+                : 'bg-[#f1ebe5] text-[#817a74]';
+          const nextAction = status === 'PENDING'
+            ? { status: 'PREPARING' as const, label: 'Start prep' }
+            : status === 'PREPARING'
+              ? { status: 'READY' as const, label: 'Mark ready' }
+              : status === 'READY'
+                ? { status: 'COMPLETED' as const, label: 'Complete' }
+                : null;
 
           return (
             <div key={order.id} className="flex items-center gap-3 rounded-xl bg-[#fdfbf8] p-2.5">
@@ -331,7 +422,7 @@ function RecentOrders({ orders, loading, error }: {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[12px] font-semibold text-[#443b35]">{order.title}</p>
                 <p className="mt-1 text-[10px] text-[#aaa29a]">
-                  {new Date(order.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                  #{order.orderNumber}{order.tableNumber ? ` · Table ${order.tableNumber}` : ''} · {new Date(order.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                 </p>
               </div>
               <div className="text-right">
@@ -341,11 +432,58 @@ function RecentOrders({ orders, loading, error }: {
                 <span className={`mt-1 inline-block rounded-md px-1.5 py-1 text-[9px] font-semibold ${statusTone}`}>
                   {formatOrderStatus(order.status)}
                 </span>
+                {nextAction && (
+                  <div className="mt-2 flex justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onStatusChange(order.id, nextAction.status)}
+                      disabled={updatingOrderId === order.id}
+                      className="rounded-md bg-[#eff6ff] px-2 py-1 text-[10px] font-semibold text-[#2563eb] hover:bg-[#dbeafe] disabled:opacity-50"
+                    >
+                      {updatingOrderId === order.id ? 'Saving…' : nextAction.label}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onStatusChange(order.id, 'CANCELLED')}
+                      disabled={updatingOrderId === order.id}
+                      className="rounded-md px-2 py-1 text-[10px] font-medium text-[#928b84] hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           );
         })}
       </div>
+      {!loading && !error && total > orderPageSize && (
+        <div className="mt-4 flex items-center justify-between border-t border-[#f1ece6] pt-3">
+          <p className="text-[11px] text-[#928b84]">
+            {page * orderPageSize + 1}–{Math.min((page + 1) * orderPageSize, total)} of {total}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              aria-label="Previous orders"
+              disabled={page === 0}
+              onClick={() => onPageChange(page - 1)}
+              className="rounded-lg border border-[#eee8df] p-2 text-[#817a74] disabled:opacity-40"
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <button
+              type="button"
+              aria-label="Next orders"
+              disabled={(page + 1) * orderPageSize >= total}
+              onClick={() => onPageChange(page + 1)}
+              className="rounded-lg border border-[#eee8df] p-2 text-[#817a74] disabled:opacity-40"
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -361,6 +499,11 @@ export default function RestaurantDashboard() {
   const [orders, setOrders] = useState<RecentOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(true);
   const [ordersError, setOrdersError] = useState('');
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+  const [orderStatusFilter, setOrderStatusFilter] = useState<OrderStatusFilter>('ALL');
+  const [orderPage, setOrderPage] = useState(0);
+  const [ordersTotal, setOrdersTotal] = useState(0);
+  const [orderRefreshVersion, setOrderRefreshVersion] = useState(0);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState('');
@@ -388,11 +531,19 @@ export default function RestaurantDashboard() {
     let active = true;
     const branchId = window.localStorage.getItem('active_branch_id');
 
-    api.get<RecentOrder[]>('/orders/recent', {
-      params: branchId ? { branchId } : undefined,
+    api.get<{ items: RecentOrder[]; total: number }>('/orders/history', {
+      params: {
+        ...(branchId ? { branchId } : {}),
+        ...(orderStatusFilter !== 'ALL' ? { status: orderStatusFilter } : {}),
+        limit: orderPageSize,
+        offset: orderPage * orderPageSize,
+      },
     })
       .then(({ data }) => {
-        if (active) setOrders(data);
+        if (active) {
+          setOrders(data.items);
+          setOrdersTotal(data.total);
+        }
       })
       .catch((err: unknown) => {
         if (active) setOrdersError(getErrorMessage(err));
@@ -404,7 +555,7 @@ export default function RestaurantDashboard() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [orderStatusFilter, orderPage, orderRefreshVersion]);
 
   const initials = user?.name
     ? user.name
@@ -422,10 +573,38 @@ export default function RestaurantDashboard() {
     router.push('/login');
   }
 
+  async function handleOrderStatusChange(
+    orderId: string,
+    status: 'PREPARING' | 'READY' | 'COMPLETED' | 'CANCELLED',
+  ) {
+    setUpdatingOrderId(orderId);
+    setOrdersLoading(true);
+    setOrdersError('');
+    try {
+      const { data } = await api.patch<{ id: string; status: string }>(`/orders/${orderId}/status`, { status });
+      setOrders((current) => current.map((order) => order.id === orderId ? { ...order, status: data.status } : order));
+      setOrderRefreshVersion((version) => version + 1);
+      const statsResponse = await api.get<DashboardStats>('/dashboard/stats');
+      setStats(statsResponse.data);
+      setStatsError('');
+    } catch (err) {
+      setOrdersError(getErrorMessage(err));
+      setOrdersLoading(false);
+    } finally {
+      setUpdatingOrderId(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#faf7f2] text-[#302a26]">
       <div className="flex min-h-screen">
-        <Sidebar open={open} onClose={() => setOpen(false)} />
+        <Sidebar
+          open={open}
+          onClose={() => setOpen(false)}
+          pathname={pathname}
+          tablesOpen={tablesOpen}
+          onToggleTables={() => setTablesOpen((current) => !current)}
+        />
 
         <div className="min-w-0 flex-1">
           {/* Header */}
@@ -608,7 +787,27 @@ export default function RestaurantDashboard() {
                   Customer profiles and order source are not recorded in the current data model.
                 </div>
               </section>
-              <RecentOrders orders={orders} loading={ordersLoading} error={ordersError} />
+              <RecentOrders
+                orders={orders}
+                loading={ordersLoading}
+                error={ordersError}
+                updatingOrderId={updatingOrderId}
+                onStatusChange={(orderId, status) => { void handleOrderStatusChange(orderId, status); }}
+                statusFilter={orderStatusFilter}
+                onStatusFilterChange={(filter) => {
+                  setOrdersLoading(true);
+                  setOrdersError('');
+                  setOrderPage(0);
+                  setOrderStatusFilter(filter);
+                }}
+                total={ordersTotal}
+                page={orderPage}
+                onPageChange={(page) => {
+                  setOrdersLoading(true);
+                  setOrdersError('');
+                  setOrderPage(page);
+                }}
+              />
             </div>
           </div>
         </div>

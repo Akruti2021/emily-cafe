@@ -60,6 +60,33 @@ CREATE TABLE IF NOT EXISTS branches (
   UNIQUE KEY uq_restaurant_branch_code (restaurant_id, code)
 );
 
+CREATE TABLE IF NOT EXISTS dining_areas (
+  id VARCHAR(36) PRIMARY KEY,
+  branch_id VARCHAR(36) NOT NULL,
+  name VARCHAR(100) NOT NULL,
+  description VARCHAR(255) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_branch_dining_area_name (branch_id, name),
+  INDEX idx_dining_areas_branch_status (branch_id, status)
+);
+
+CREATE TABLE IF NOT EXISTS restaurant_tables (
+  id VARCHAR(36) PRIMARY KEY,
+  dining_area_id VARCHAR(36) NOT NULL,
+  table_number VARCHAR(40) NOT NULL,
+  capacity TINYINT UNSIGNED NOT NULL DEFAULT 2,
+  status VARCHAR(24) NOT NULL DEFAULT 'available',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (dining_area_id) REFERENCES dining_areas(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_area_table_number (dining_area_id, table_number),
+  INDEX idx_restaurant_tables_status (dining_area_id, status)
+);
+
 -- 3. Menu & Categories
 CREATE TABLE IF NOT EXISTS categories (
   id VARCHAR(36) PRIMARY KEY,
@@ -93,6 +120,7 @@ CREATE TABLE IF NOT EXISTS orders (
   id VARCHAR(36) PRIMARY KEY,
   restaurant_id VARCHAR(36) NOT NULL,
   branch_id VARCHAR(36) NOT NULL,
+  table_id VARCHAR(36) NULL,
   order_number VARCHAR(60) NOT NULL,
   order_type VARCHAR(20) NOT NULL,
   status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
@@ -100,11 +128,12 @@ CREATE TABLE IF NOT EXISTS orders (
   tax_total DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
   discount_total DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
   grand_total DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
-  created_by_id VARCHAR(36) NOT NULL,
+  created_by_id VARCHAR(36) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (restaurant_id) REFERENCES restaurants(id) ON DELETE CASCADE,
   FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE,
   FOREIGN KEY (created_by_id) REFERENCES users(id),
+  FOREIGN KEY (table_id) REFERENCES restaurant_tables(id) ON DELETE SET NULL,
   UNIQUE KEY uq_branch_order (branch_id, order_number),
   INDEX idx_orders_branch_created (branch_id, created_at DESC)
 );
