@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { pool } from '../../config/db';
 import { AppError } from '../../middleware/errorhandler';
+import { requireBranchPermission, type BranchPermission } from '../organization/branch-access';
 
 interface DiningAreaRow extends RowDataPacket {
   id: string;
@@ -26,20 +27,8 @@ interface RestaurantTableRow extends RowDataPacket {
   updatedAt: Date;
 }
 
-async function assertOwnedBranch(branchId: string, userId: string) {
-  const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT b.id
-       FROM branches b
-       JOIN restaurants r ON r.id = b.restaurant_id
-      WHERE b.id = ?
-        AND r.owner_user_id = ?
-        AND b.status = 'active'
-        AND r.status = 'active'
-      LIMIT 1`,
-    [branchId, userId],
-  );
-
-  if (rows.length === 0) throw new AppError(404, 'Branch not found');
+async function assertBranchAccess(branchId: string, userId: string, permission: BranchPermission = 'tables.manage') {
+  await requireBranchPermission(userId, branchId, permission);
 }
 
 async function assertUniqueAreaName(branchId: string, name: string, exceptId?: string) {
@@ -58,7 +47,7 @@ async function assertUniqueAreaName(branchId: string, name: string, exceptId?: s
 }
 
 export async function listDiningAreas(branchId: string, userId: string) {
-  await assertOwnedBranch(branchId, userId);
+  await assertBranchAccess(branchId, userId, 'tables.view');
 
   const [rows] = await pool.query<DiningAreaRow[]>(
     `SELECT id,
@@ -83,7 +72,7 @@ export async function createDiningArea(
   userId: string,
   input: { name: string; description?: string | null },
 ) {
-  await assertOwnedBranch(branchId, userId);
+  await assertBranchAccess(branchId, userId, 'tables.manage');
   await assertUniqueAreaName(branchId, input.name);
 
   const id = crypto.randomUUID();
@@ -113,7 +102,7 @@ export async function updateDiningArea(
     status?: 'active' | 'inactive';
   },
 ) {
-  await assertOwnedBranch(branchId, userId);
+  await assertBranchAccess(branchId, userId, 'tables.manage');
 
   const [existingRows] = await pool.query<RowDataPacket[]>(
     'SELECT id FROM dining_areas WHERE id = ? AND branch_id = ? LIMIT 1',
@@ -151,7 +140,7 @@ export async function updateDiningArea(
 }
 
 export async function deleteDiningArea(branchId: string, areaId: string, userId: string) {
-  await assertOwnedBranch(branchId, userId);
+  await assertBranchAccess(branchId, userId, 'tables.manage');
   const [result] = await pool.query<ResultSetHeader>(
     'DELETE FROM dining_areas WHERE id = ? AND branch_id = ?',
     [areaId, branchId],
@@ -185,7 +174,7 @@ async function assertUniqueTableNumber(areaId: string, tableNumber: string, exce
 }
 
 export async function listRestaurantTables(branchId: string, userId: string) {
-  await assertOwnedBranch(branchId, userId);
+  await assertBranchAccess(branchId, userId, 'tables.view');
   const [rows] = await pool.query<RestaurantTableRow[]>(
     `SELECT t.id,
             r.id AS restaurantId,
@@ -200,9 +189,9 @@ export async function listRestaurantTables(branchId: string, userId: string) {
        JOIN dining_areas da ON da.id = t.dining_area_id
        JOIN branches b ON b.id = da.branch_id
        JOIN restaurants r ON r.id = b.restaurant_id
-      WHERE b.id = ? AND r.owner_user_id = ?
+      WHERE b.id = ?
       ORDER BY da.sort_order ASC, da.name ASC, t.table_number ASC`,
-    [branchId, userId],
+    [branchId],
   );
   return rows;
 }
@@ -212,7 +201,7 @@ export async function createRestaurantTable(
   userId: string,
   input: { areaId: string; tableNumber: string; capacity: number },
 ) {
-  await assertOwnedBranch(branchId, userId);
+  await assertBranchAccess(branchId, userId, 'tables.manage');
   await assertActiveDiningArea(branchId, input.areaId);
   await assertUniqueTableNumber(input.areaId, input.tableNumber);
 
@@ -238,7 +227,13 @@ export async function updateRestaurantTable(
     status?: 'available' | 'occupied' | 'reserved' | 'out_of_service';
   },
 ) {
-  await assertOwnedBranch(branchId, userId);
+  const permission = input.status !== undefined
+    && input.areaId === undefined
+    && input.tableNumber === undefined
+    && input.capacity === undefined
+    ? 'tables.status'
+    : 'tables.manage';
+  await assertBranchAccess(branchId, userId, permission);
   const [existingRows] = await pool.query<RowDataPacket[]>(
     `SELECT t.dining_area_id AS areaId
        FROM restaurant_tables t
@@ -287,7 +282,7 @@ export async function updateRestaurantTable(
 }
 
 export async function deleteRestaurantTable(branchId: string, tableId: string, userId: string) {
-  await assertOwnedBranch(branchId, userId);
+  await assertBranchAccess(branchId, userId, 'tables.manage');
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT t.id
        FROM restaurant_tables t

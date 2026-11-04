@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { RowDataPacket } from 'mysql2/promise';
 import { pool } from '../../config/db';
 import { AppError } from '../../middleware/errorhandler';
+import { roleHasPermission, type BranchRole } from '../organization/branch-access';
 
 interface RecentOrderRow extends RowDataPacket {
   id: string;
@@ -27,9 +28,9 @@ export async function getOrderHistory(
   const conditions = [
     "r.status = 'active'",
     'b.status = \'active\'',
-    'r.owner_user_id = ?',
+    "(r.owner_user_id = ? OR EXISTS (SELECT 1 FROM branch_users bu WHERE bu.branch_id = o.branch_id AND bu.user_id = ? AND bu.role IN ('BRANCH_MANAGER', 'CASHIER', 'WAITER')))",
   ];
-  const values: Array<string | number> = [userId];
+  const values: Array<string | number> = [userId, userId];
 
   if (options.branchId) {
     conditions.push('o.branch_id = ?');
@@ -215,6 +216,116 @@ export async function createDineInOrder(input: {
   }
 }
 
+export async function createPosDineInOrder(
+  userId: string,
+  input: { branchId: string; tableId: string; items: Array<{ menuItemId: string; quantity: number }> },
+) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [tableRows] = await connection.query<Array<RowDataPacket & {
+      restaurantId: string;
+      status: string;
+      role: BranchRole;
+    }>>(
+      [
+        "SELECT b.restaurant_id AS restaurantId, t.status,",
+        "       CASE WHEN r.owner_user_id = ? THEN 'OWNER' ELSE bu.role END AS role",
+        "  FROM restaurant_tables t",
+        "  JOIN dining_areas da ON da.id = t.dining_area_id AND da.status = 'active'",
+        "  JOIN branches b ON b.id = da.branch_id AND b.status = 'active'",
+        "  JOIN restaurants r ON r.id = b.restaurant_id AND r.status = 'active'",
+        "  LEFT JOIN branch_users bu ON bu.branch_id = b.id AND bu.user_id = ?",
+        " WHERE b.id = ? AND t.id = ? AND (r.owner_user_id = ? OR bu.user_id = ?)",
+        " LIMIT 1 FOR UPDATE",
+      ].join("\n"),
+      [userId, userId, input.branchId, input.tableId, userId, userId],
+    );
+    const table = tableRows[0];
+    if (!table) throw new AppError(404, 'Table not found');
+    if (!roleHasPermission(table.role, 'orders.create')) throw new AppError(403, 'Forbidden');
+    if (table.status !== 'available') {
+      throw new AppError(409, 'Choose an available table to start a new POS order');
+    }
+
+    const quantities = new Map<string, number>();
+    for (const line of input.items) {
+      quantities.set(line.menuItemId, (quantities.get(line.menuItemId) ?? 0) + line.quantity);
+    }
+    const menuItemIds = [...quantities.keys()];
+    const placeholders = menuItemIds.map(() => '?').join(', ');
+    const menuSql = [
+      "SELECT mi.id, mi.name, mi.base_price AS basePrice, mi.tax_rate AS taxRate",
+      "  FROM menu_items mi",
+      "  JOIN categories c ON c.id = mi.category_id AND c.restaurant_id = mi.restaurant_id AND c.status = 'active'",
+      " WHERE mi.restaurant_id = ? AND mi.status = 'active' AND mi.id IN (" + placeholders + ")",
+    ].join("\n");
+    const [menuItems] = await connection.query<DineInMenuItemRow[]>(
+      menuSql,
+      [table.restaurantId, ...menuItemIds],
+    );
+    if (menuItems.length !== menuItemIds.length) {
+      throw new AppError(400, 'One or more menu items are no longer available');
+    }
+
+    const menuById = new Map(menuItems.map((item) => [item.id, item]));
+    let subtotalCents = 0;
+    let taxTotalCents = 0;
+    const orderLines = menuItemIds.map((menuItemId) => {
+      const item = menuById.get(menuItemId)!;
+      const quantity = quantities.get(menuItemId)!;
+      if (quantity > 20) throw new AppError(400, 'An item quantity cannot exceed 20');
+      const unitPriceCents = Math.round(Number(item.basePrice) * 100);
+      const taxRateBasisPoints = Math.round(Number(item.taxRate) * 100);
+      const lineTotalCents = unitPriceCents * quantity;
+      const lineTaxCents = Math.round(lineTotalCents * taxRateBasisPoints / 10000);
+      subtotalCents += lineTotalCents;
+      taxTotalCents += lineTaxCents;
+      return {
+        id: crypto.randomUUID(),
+        menuItemId,
+        name: item.name,
+        unitPrice: unitPriceCents / 100,
+        quantity,
+        lineTotal: lineTotalCents / 100,
+      };
+    });
+    const subtotal = subtotalCents / 100;
+    const taxTotal = taxTotalCents / 100;
+    const grandTotal = (subtotalCents + taxTotalCents) / 100;
+    const orderId = crypto.randomUUID();
+    const orderNumber = 'P' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(3).toString('hex').toUpperCase();
+
+    await connection.query(
+      "INSERT INTO orders (id, restaurant_id, branch_id, table_id, order_number, order_type, status, subtotal, tax_total, discount_total, grand_total, created_by_id) VALUES (?, ?, ?, ?, ?, 'DINE_IN', 'PENDING', ?, ?, 0, ?, ?)",
+      [orderId, table.restaurantId, input.branchId, input.tableId, orderNumber, subtotal, taxTotal, grandTotal, userId],
+    );
+    for (const line of orderLines) {
+      await connection.query(
+        "INSERT INTO order_items (id, order_id, menu_item_id, item_name_snapshot, unit_price, quantity, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [line.id, orderId, line.menuItemId, line.name, line.unitPrice, line.quantity, line.lineTotal],
+      );
+    }
+    await connection.query("UPDATE restaurant_tables SET status = 'occupied' WHERE id = ?", [input.tableId]);
+    await connection.commit();
+    return {
+      id: orderId,
+      orderNumber,
+      tableId: input.tableId,
+      status: 'PENDING',
+      subtotal,
+      taxTotal,
+      grandTotal,
+      items: orderLines.map(({ name, quantity, unitPrice, lineTotal }) => ({ name, quantity, unitPrice, lineTotal })),
+    };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 export async function getRecentOrders(userId: string, branchId?: string) {
   const [rows] = await pool.query<RecentOrderRow[]>(
     `SELECT o.id,
@@ -231,13 +342,17 @@ export async function getRecentOrders(userId: string, branchId?: string) {
        LEFT JOIN restaurant_tables t ON t.id = o.table_id
        JOIN restaurants r ON r.id = o.restaurant_id
                          AND r.id = b.restaurant_id
-                         AND r.owner_user_id = ?
-      WHERE r.status = 'active'
+      WHERE (r.owner_user_id = ? OR EXISTS (
+          SELECT 1 FROM branch_users bu
+           WHERE bu.branch_id = o.branch_id AND bu.user_id = ?
+             AND bu.role IN ('BRANCH_MANAGER', 'CASHIER', 'WAITER')
+        ))
+        AND r.status = 'active'
         AND b.status = 'active'
         AND (? IS NULL OR o.branch_id = ?)
       ORDER BY o.created_at DESC
       LIMIT 5`,
-    [userId, branchId ?? null, branchId ?? null],
+    [userId, userId, branchId ?? null, branchId ?? null],
   );
 
   return rows.map((row) => ({
@@ -270,10 +385,15 @@ export async function updateOrderStatus(
          FROM orders o
          JOIN branches b ON b.id = o.branch_id
          JOIN restaurants r ON r.id = b.restaurant_id AND r.id = o.restaurant_id
-        WHERE o.id = ? AND r.owner_user_id = ?
+        WHERE o.id = ? AND b.status = 'active' AND r.status = 'active'
+          AND (r.owner_user_id = ? OR EXISTS (
+            SELECT 1 FROM branch_users bu
+             WHERE bu.branch_id = o.branch_id AND bu.user_id = ?
+               AND bu.role IN ('BRANCH_MANAGER', 'CASHIER', 'WAITER')
+          ))
         LIMIT 1
         FOR UPDATE`,
-      [orderId, userId],
+      [orderId, userId, userId],
     );
     const order = rows[0];
     if (!order) throw new AppError(404, 'Order not found');

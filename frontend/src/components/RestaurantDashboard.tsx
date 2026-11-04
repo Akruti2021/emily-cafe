@@ -36,6 +36,9 @@ import {
 
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
+  { label: 'POS', icon: ShoppingBag, href: '/dashboard/pos' },
+  { label: 'Kitchen', icon: UtensilsCrossed, href: '/dashboard/kitchen' },
+  { label: 'Team access', icon: Users, href: '/dashboard/team' },
   { label: 'Menu Management', icon: UtensilsCrossed, href: '/menu' },
   { label: 'Analytics', icon: BarChart3, href: '#analytics' },
   { label: 'Order', icon: ShoppingBag, href: '#orders' },
@@ -97,7 +100,7 @@ function Sidebar({
                 key={label}
                 href={href}
                 className={`flex h-11 items-center gap-3 rounded-xl px-3 text-[13px] font-medium transition-colors ${
-                  label === 'Dashboard'
+                  pathname === href
                     ? 'bg-[#eff6ff] text-[#2563eb]'
                     : 'text-[#817a74] hover:bg-[#f1f5f9]'
                 }`}

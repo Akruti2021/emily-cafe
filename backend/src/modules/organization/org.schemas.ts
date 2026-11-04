@@ -16,6 +16,15 @@ export const registerRestaurantOnboardingSchema = z.object({
   password,
 });
 
+export const createBranchMemberSchema = z.object({
+  email,
+  role: z.enum(['BRANCH_MANAGER', 'CASHIER', 'WAITER', 'KITCHEN_STAFF', 'INVENTORY_MANAGER', 'ACCOUNTANT']),
+});
+
+export const updateBranchMemberSchema = z.object({
+  role: z.enum(['BRANCH_MANAGER', 'CASHIER', 'WAITER', 'KITCHEN_STAFF', 'INVENTORY_MANAGER', 'ACCOUNTANT']),
+});
+
 export const createBranchSchema = z.object({
   restaurantId: z.string().uuid('Invalid restaurant ID'),
   code: z.string().trim().min(2, 'Branch code must be at least 2 characters').max(40),

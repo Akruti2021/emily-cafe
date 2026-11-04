@@ -87,6 +87,24 @@ CREATE TABLE IF NOT EXISTS restaurant_tables (
   INDEX idx_restaurant_tables_status (dining_area_id, status)
 );
 
+CREATE TABLE IF NOT EXISTS branch_users (
+  id VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  branch_id VARCHAR(36) NOT NULL,
+  role VARCHAR(30) NOT NULL,
+  assigned_by_id VARCHAR(36) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT chk_branch_users_role CHECK (
+    role IN ('BRANCH_MANAGER', 'CASHIER', 'WAITER', 'KITCHEN_STAFF', 'INVENTORY_MANAGER', 'ACCOUNTANT')
+  ),
+  UNIQUE KEY uq_branch_users_user_branch (user_id, branch_id),
+  INDEX idx_branch_users_branch_role (branch_id, role),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE,
+  FOREIGN KEY (assigned_by_id) REFERENCES users(id)
+);
+
 -- 3. Menu & Categories
 CREATE TABLE IF NOT EXISTS categories (
   id VARCHAR(36) PRIMARY KEY,
@@ -149,4 +167,38 @@ CREATE TABLE IF NOT EXISTS order_items (
   FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
   FOREIGN KEY (menu_item_id) REFERENCES menu_items(id) ON DELETE SET NULL,
   INDEX idx_order_items_order (order_id)
+);
+
+-- 5. Kitchen Order Tickets and item-level preparation state.
+CREATE TABLE IF NOT EXISTS kots (
+  id VARCHAR(36) PRIMARY KEY,
+  branch_id VARCHAR(36) NOT NULL,
+  order_id VARCHAR(36) NOT NULL,
+  kot_number VARCHAR(60) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'New',
+  sent_by_id VARCHAR(36) NOT NULL,
+  sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ready_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE,
+  FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+  FOREIGN KEY (sent_by_id) REFERENCES users(id),
+  UNIQUE KEY uq_kot_branch_number (branch_id, kot_number),
+  UNIQUE KEY uq_kots_order (order_id),
+  INDEX idx_kots_branch_status_sent (branch_id, status, sent_at),
+  INDEX idx_kots_order (order_id)
+);
+
+CREATE TABLE IF NOT EXISTS kot_items (
+  id VARCHAR(36) PRIMARY KEY,
+  kot_id VARCHAR(36) NOT NULL,
+  order_item_id VARCHAR(36) NOT NULL,
+  quantity DECIMAL(12, 3) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'New',
+  instructions TEXT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (kot_id) REFERENCES kots(id) ON DELETE CASCADE,
+  FOREIGN KEY (order_item_id) REFERENCES order_items(id) ON DELETE CASCADE,
+  INDEX idx_kot_items_ticket_status (kot_id, status)
 );

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { asyncHandler } from '../../utils/asyncHandler';
-import { createDineInOrderSchema, updateOrderStatusSchema } from './orders.schemas';
+import { createDineInOrderSchema, createPosDineInOrderSchema, updateOrderStatusSchema } from './orders.schemas';
 import * as svc from './orders.service';
 import { rateLimit } from 'express-rate-limit';
 
@@ -22,6 +22,15 @@ ordersRouter.post(
 );
 
 ordersRouter.use(requireAuth);
+
+ordersRouter.post(
+  '/pos/dine-in',
+  validate(createPosDineInOrderSchema),
+  asyncHandler(async (req, res) => {
+    const order = await svc.createPosDineInOrder(req.user!.id, req.body);
+    res.status(201).json(order);
+  }),
+);
 
 ordersRouter.get('/recent', asyncHandler(async (req, res) => {
   const rawBranchId = req.query.branchId;

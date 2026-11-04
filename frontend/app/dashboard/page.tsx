@@ -11,7 +11,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!loading && !user) {
-      router.push('/login');
+      router.replace('/login');
+    } else if (!loading && user && user.role !== 'OWNER') {
+      router.replace('/dashboard/pos');
     }
   }, [user, loading, router]);
 
@@ -23,7 +25,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!user) return null;
+  if (!user || user.role !== 'OWNER') return null;
 
   return <RestaurantDashboard />;
 }
