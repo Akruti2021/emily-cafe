@@ -10,6 +10,7 @@ import {
   updateCategorySchema,
   createMenuItemSchema,
   updateMenuItemSchema,
+  itemOptionsSchema,
 } from './menu.schemas';
 
 export const menuRouter = Router();
@@ -80,6 +81,13 @@ menuRouter.patch(
     res.json(result);
   }),
 );
+
+menuRouter.put('/:restaurantId/items/:itemId/options', validate(itemOptionsSchema), asyncHandler(async (req, res) => {
+  const restaurant = restaurantIdSchema.safeParse(req.params.restaurantId);
+  const item = resourceIdSchema.safeParse(req.params.itemId);
+  if (!restaurant.success || !item.success) return res.status(400).json({ error: 'Invalid restaurant or item ID' });
+  res.json(await svc.saveItemOptions(restaurant.data, item.data, req.user!.id, req.body));
+}));
 
 menuRouter.post(
   '/:restaurantId/items',

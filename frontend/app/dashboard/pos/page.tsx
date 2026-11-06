@@ -9,11 +9,11 @@ import { api, getErrorMessage } from '../../../src/api/client';
 
 type Branch = { id: string; restaurantId: string; restaurantName: string; name: string; code: string; role: string };
 type DiningTable = { id: string; tableNumber: string; areaName: string; capacity: number; status: string };
-type MenuItem = { id: string; name: string; description: string | null; price: number; taxRate: number; status?: string };
+type MenuItem = { id: string; name: string; description: string | null; price: number; taxRate: number; status?: string; variants?: Array<{id:string;name:string;priceDelta:number}>; addonGroups?: Array<{id:string;name:string;minSelections:number;maxSelections:number;addons:Array<{id:string;name:string;priceDelta:number}>}> };
 type MenuCategory = { id: string; name: string; items: MenuItem[] };
 type CreatedOrder = { id: string; orderNumber: string; subtotal: number; taxTotal: number; grandTotal: number };
 
-const money = (value: number) => '₹' + value.toFixed(2);
+const money = (value: number | string) => '₹' + Number(value).toFixed(2);
 
 export default function PosPage() {
   const router = useRouter();
@@ -24,6 +24,8 @@ export default function PosPage() {
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [tableId, setTableId] = useState('');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [variants, setVariants] = useState<Record<string,string>>({});
+  const [addons, setAddons] = useState<Record<string,string[]>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -86,8 +88,9 @@ export default function PosPage() {
     categories.flatMap((category) => category.items.map((item) => ({ ...item, categoryName: category.name }))),
   [categories]);
   const selectedItems = items.filter((item) => (quantities[item.id] ?? 0) > 0);
-  const subtotal = selectedItems.reduce((sum, item) => sum + item.price * quantities[item.id], 0);
-  const estimatedTax = selectedItems.reduce((sum, item) => sum + item.price * quantities[item.id] * item.taxRate / 100, 0);
+  const configuredPrice = (item: MenuItem) => Number(item.price) + Number(item.variants?.find((v) => v.id === variants[item.id])?.priceDelta ?? 0) + (item.addonGroups ?? []).flatMap((g) => g.addons).filter((a) => (addons[item.id] ?? []).includes(a.id)).reduce((s,a) => s + Number(a.priceDelta), 0);
+  const subtotal = selectedItems.reduce((sum, item) => sum + configuredPrice(item) * quantities[item.id], 0);
+  const estimatedTax = selectedItems.reduce((sum, item) => sum + configuredPrice(item) * quantities[item.id] * item.taxRate / 100, 0);
   const availableTables = tables.filter((table) => table.status === 'available');
 
   function changeQuantity(itemId: string, delta: number) {
@@ -108,7 +111,7 @@ export default function PosPage() {
       const { data } = await api.post<CreatedOrder>('/orders/pos/dine-in', {
         branchId: branch.id,
         tableId,
-        items: selectedItems.map((item) => ({ menuItemId: item.id, quantity: quantities[item.id] })),
+        items: selectedItems.map((item) => ({ menuItemId: item.id, quantity: quantities[item.id], ...(variants[item.id] ? { variantId: variants[item.id] } : {}), addonIds: addons[item.id] ?? [] })),
       });
       setSuccess(data);
       setKotNumber('');
@@ -206,7 +209,9 @@ export default function PosPage() {
                             <article key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-[#eee8df] p-4">
                               <div className="min-w-0">
                                 <h4 className="truncate text-sm font-semibold">{item.name}</h4>
-                                <p className="mt-1 text-xs text-[#817a74]">{money(item.price)} · Tax {Number(item.taxRate)}%</p>
+                                <p className="mt-1 text-xs text-[#817a74]">{money(configuredPrice(item))} · Tax {Number(item.taxRate)}%</p>
+                                {!!item.variants?.length && <select aria-label={`${item.name} variant`} className="mt-2 block w-full rounded-lg border border-[#e8e2da] p-2 text-xs" value={variants[item.id] ?? ''} onChange={(e) => setVariants((s) => ({...s,[item.id]:e.target.value}))}><option value="">Default</option>{item.variants.map((v) => <option key={v.id} value={v.id}>{v.name} ({v.priceDelta >= 0 ? '+' : ''}{money(v.priceDelta)})</option>)}</select>}
+                                {(item.addonGroups ?? []).map((group) => <fieldset key={group.id} className="mt-2 text-xs"><legend className="font-medium">{group.name} · choose {group.minSelections === group.maxSelections ? group.minSelections : `${group.minSelections}–${group.maxSelections}`}</legend>{group.addons.map((addon) => <label key={addon.id} className="mr-2 inline-flex items-center gap-1"><input type="checkbox" checked={(addons[item.id] ?? []).includes(addon.id)} onChange={(e) => setAddons((s) => { const selected=s[item.id]??[]; return {...s,[item.id]:e.target.checked?[...selected,addon.id]:selected.filter((id)=>id!==addon.id)}; })} />{addon.name} (+{money(addon.priceDelta)})</label>)}</fieldset>)}
                               </div>
                               <div className="flex shrink-0 items-center gap-2">
                                 <button type="button" onClick={() => changeQuantity(item.id, -1)} aria-label={'Remove one ' + item.name} className="rounded-lg border border-[#e8e2da] p-2 disabled:opacity-40" disabled={!quantities[item.id]}><Minus size={14} /></button>
@@ -239,8 +244,8 @@ export default function PosPage() {
               <div className="my-5 space-y-3 border-y border-[#eee8df] py-4">
                 {selectedItems.length === 0 ? <p className="text-sm text-[#928b84]">Add menu items to start.</p> : selectedItems.map((item) => (
                   <div key={item.id} className="flex justify-between gap-3 text-sm">
-                    <span>{quantities[item.id]} × {item.name}</span>
-                    <span className="tabular-nums">{money(item.price * quantities[item.id])}</span>
+                    <span>{quantities[item.id]} × {item.name}{variants[item.id] ? ` · ${item.variants?.find((v)=>v.id===variants[item.id])?.name}` : ''}</span>
+                    <span className="tabular-nums">{money(configuredPrice(item) * quantities[item.id])}</span>
                   </div>
                 ))}
               </div>

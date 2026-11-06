@@ -30,7 +30,8 @@ export async function listKots(userId: string, branchId: string) {
             JSON_ARRAYAGG(JSON_OBJECT(
               'id', ki.id, 'orderItemId', ki.order_item_id,
               'name', oi.item_name_snapshot, 'quantity', ki.quantity,
-              'status', ki.status, 'instructions', ki.instructions
+              'status', ki.status, 'instructions', ki.instructions,
+              'customizations', COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT('name', oc.name_snapshot, 'type', oc.customization_type, 'priceDelta', oc.price_delta_snapshot)) FROM order_item_customizations oc WHERE oc.order_item_id = oi.id), JSON_ARRAY())
             )) AS items
        FROM kots k
        JOIN orders o ON o.id = k.order_id AND o.branch_id = k.branch_id

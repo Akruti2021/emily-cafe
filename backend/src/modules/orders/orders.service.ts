@@ -218,7 +218,7 @@ export async function createDineInOrder(input: {
 
 export async function createPosDineInOrder(
   userId: string,
-  input: { branchId: string; tableId: string; items: Array<{ menuItemId: string; quantity: number }> },
+  input: { branchId: string; tableId: string; items: Array<{ menuItemId: string; quantity: number; variantId?: string; addonIds: string[] }> },
 ) {
   const connection = await pool.getConnection();
   try {
@@ -248,11 +248,7 @@ export async function createPosDineInOrder(
       throw new AppError(409, 'Choose an available table to start a new POS order');
     }
 
-    const quantities = new Map<string, number>();
-    for (const line of input.items) {
-      quantities.set(line.menuItemId, (quantities.get(line.menuItemId) ?? 0) + line.quantity);
-    }
-    const menuItemIds = [...quantities.keys()];
+    const menuItemIds = input.items.map((line) => line.menuItemId);
     const placeholders = menuItemIds.map(() => '?').join(', ');
     const menuSql = [
       "SELECT mi.id, mi.name, mi.base_price AS basePrice, mi.tax_rate AS taxRate",
@@ -271,11 +267,34 @@ export async function createPosDineInOrder(
     const menuById = new Map(menuItems.map((item) => [item.id, item]));
     let subtotalCents = 0;
     let taxTotalCents = 0;
-    const orderLines = menuItemIds.map((menuItemId) => {
+    const configured = new Map<string, Array<{ type: 'variant' | 'addon'; id: string; name: string; delta: number }>>();
+    for (const line of input.items) {
+      const selected: Array<{ type: 'variant' | 'addon'; id: string; name: string; delta: number }> = [];
+      if (line.variantId) {
+        const [rows] = await connection.query<Array<RowDataPacket & { id: string; name: string; delta: number }>>("SELECT id,name,price_delta AS delta FROM menu_item_variants WHERE id=? AND menu_item_id=? AND status='active'", [line.variantId, line.menuItemId]);
+        if (!rows.length) throw new AppError(400, 'Selected variant is unavailable');
+        selected.push({ type: 'variant', id: rows[0].id, name: rows[0].name, delta: Number(rows[0].delta) });
+      }
+      if (line.addonIds.length) {
+        const [rows] = await connection.query<Array<RowDataPacket & { id: string; groupId: string; name: string; delta: number }>>(`SELECT a.id, a.group_id AS groupId, a.name, a.price_delta AS delta FROM menu_item_addons a JOIN menu_item_addon_groups g ON g.id=a.group_id WHERE a.id IN (${line.addonIds.map(() => '?').join(',')}) AND g.menu_item_id=? AND a.status='active' AND g.status='active'`, [...line.addonIds, line.menuItemId]);
+        if (rows.length !== line.addonIds.length) throw new AppError(400, 'One or more add-ons are unavailable');
+        selected.push(...rows.map((row) => ({ type: 'addon' as const, id: row.id, name: row.name, delta: Number(row.delta) })));
+      }
+      const [groups] = await connection.query<Array<RowDataPacket & { id: string; minSelections: number; maxSelections: number }>>("SELECT id,min_selections AS minSelections,max_selections AS maxSelections FROM menu_item_addon_groups WHERE menu_item_id=? AND status='active'", [line.menuItemId]);
+      for (const group of groups) {
+        const chosen = selected.filter((option) => option.type === 'addon' && line.addonIds.includes(option.id));
+        const groupAddonIds = line.addonIds.length ? (await connection.query<Array<RowDataPacket & { n: number }>>(`SELECT COUNT(*) AS n FROM menu_item_addons WHERE group_id=? AND id IN (${line.addonIds.map(() => '?').join(',')})`, [group.id, ...line.addonIds]))[0][0]?.n ?? 0 : 0;
+        if (Number(groupAddonIds) < Number(group.minSelections) || Number(groupAddonIds) > Number(group.maxSelections)) throw new AppError(400, 'Choose the required number of add-ons for each group');
+        void chosen;
+      }
+      configured.set(line.menuItemId, selected);
+    }
+    const orderLines = input.items.map(({ menuItemId, quantity }) => {
       const item = menuById.get(menuItemId)!;
-      const quantity = quantities.get(menuItemId)!;
       if (quantity > 20) throw new AppError(400, 'An item quantity cannot exceed 20');
-      const unitPriceCents = Math.round(Number(item.basePrice) * 100);
+      const options = configured.get(menuItemId) ?? [];
+      const unitPriceCents = Math.round((Number(item.basePrice) + options.reduce((sum, option) => sum + option.delta, 0)) * 100);
+      if (unitPriceCents < 0) throw new AppError(400, 'Configured item price cannot be below zero');
       const taxRateBasisPoints = Math.round(Number(item.taxRate) * 100);
       const lineTotalCents = unitPriceCents * quantity;
       const lineTaxCents = Math.round(lineTotalCents * taxRateBasisPoints / 10000);
@@ -288,6 +307,7 @@ export async function createPosDineInOrder(
         unitPrice: unitPriceCents / 100,
         quantity,
         lineTotal: lineTotalCents / 100,
+        customizations: options,
       };
     });
     const subtotal = subtotalCents / 100;
@@ -305,6 +325,10 @@ export async function createPosDineInOrder(
         "INSERT INTO order_items (id, order_id, menu_item_id, item_name_snapshot, unit_price, quantity, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [line.id, orderId, line.menuItemId, line.name, line.unitPrice, line.quantity, line.lineTotal],
       );
+      for (const option of line.customizations) await connection.query(
+        'INSERT INTO order_item_customizations (id, order_item_id, customization_type, variant_id, addon_id, name_snapshot, price_delta_snapshot) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [crypto.randomUUID(), line.id, option.type, option.type === 'variant' ? option.id : null, option.type === 'addon' ? option.id : null, option.name, option.delta],
+      );
     }
     await connection.query("UPDATE restaurant_tables SET status = 'occupied' WHERE id = ?", [input.tableId]);
     await connection.commit();
@@ -316,7 +340,7 @@ export async function createPosDineInOrder(
       subtotal,
       taxTotal,
       grandTotal,
-      items: orderLines.map(({ name, quantity, unitPrice, lineTotal }) => ({ name, quantity, unitPrice, lineTotal })),
+      items: orderLines.map(({ name, quantity, unitPrice, lineTotal, customizations }) => ({ name, quantity, unitPrice, lineTotal, customizations: customizations.map(({ name, delta }) => ({ name, priceDelta: delta })) })),
     };
   } catch (error) {
     await connection.rollback();

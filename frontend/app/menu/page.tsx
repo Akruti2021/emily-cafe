@@ -22,6 +22,8 @@ type MenuItem = {
   price: number | string;
   taxRate: number | string;
   status?: 'active' | 'inactive';
+  variants?: Array<{ id: string; name: string; priceDelta: number; status: 'active' | 'inactive'; sortOrder: number }>;
+  addonGroups?: Array<{ id: string; name: string; minSelections: number; maxSelections: number; status: 'active' | 'inactive'; sortOrder: number; addons: Array<{ id: string; name: string; priceDelta: number; status: 'active' | 'inactive'; sortOrder: number }> }>;
 };
 
 type MenuCategory = {
@@ -96,6 +98,8 @@ export default function MenuPage() {
   const [itemDialog, setItemDialog] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [itemForm, setItemForm] = useState<ItemForm>(emptyItem);
+  const [optionsItem, setOptionsItem] = useState<MenuItem | null>(null);
+  const [optionsText, setOptionsText] = useState('');
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -321,6 +325,18 @@ export default function MenuPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function saveOptions(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!optionsItem || !restaurantId) return;
+    setSaving(true); setError(''); setNotice('');
+    try {
+      const parsed = JSON.parse(optionsText);
+      await api.put(`/menu/${encodeURIComponent(restaurantId)}/items/${encodeURIComponent(optionsItem.id)}/options`, parsed);
+      setOptionsItem(null); setNotice(`Options saved for ${optionsItem.name}.`); await loadMenu();
+    } catch (err) { setError(err instanceof SyntaxError ? 'Options must be valid JSON.' : getErrorMessage(err)); }
+    finally { setSaving(false); }
   }
 
   async function toggleItemStatus(item: MenuItem) {
@@ -663,6 +679,15 @@ export default function MenuPage() {
 
                           <button
                             type="button"
+                            onClick={() => { setOptionsItem(item); setOptionsText(JSON.stringify({ variants: item.variants ?? [], addonGroups: item.addonGroups ?? [] }, null, 2)); }}
+                            disabled={saving}
+                            className={`${buttonClass} border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100`}
+                          >
+                            Options
+                          </button>
+
+                          <button
+                            type="button"
                             onClick={() => openEditItem(item, category.id)}
                             disabled={saving}
                             className={`${buttonClass} border border-stone-200 bg-white text-stone-700 hover:bg-stone-50`}
@@ -688,6 +713,20 @@ export default function MenuPage() {
           </div>
         )}
       </div>
+
+      {optionsItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-stone-950/40 p-4">
+          <form onSubmit={saveOptions} className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-xl font-semibold">Variants & add-ons · {optionsItem.name}</h2>
+            <p className="mt-2 text-sm text-stone-500">Edit the option groups below. Keep the JSON structure intact; priceDelta is added to the base price.</p>
+            <textarea className={`${inputClass} mt-4 font-mono text-xs`} rows={18} value={optionsText} onChange={(event) => setOptionsText(event.target.value)} spellCheck={false} />
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setOptionsItem(null)} className={`${buttonClass} border border-stone-200 text-stone-700`}>Cancel</button>
+              <button type="submit" disabled={saving} className={`${buttonClass} bg-blue-600 text-white`}>{saving ? 'Saving…' : 'Save options'}</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {categoryDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4">

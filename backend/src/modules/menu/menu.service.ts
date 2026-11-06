@@ -79,7 +79,55 @@ export async function getMenu(restaurantId: string, includeInactive = false) {
     }
   }
 
-  return [...categories.values()];
+  const result = [...categories.values()];
+  const ids = result.flatMap((category) => category.items.map((item) => item.id));
+  if (!ids.length) return result;
+  const marks = ids.map(() => '?').join(',');
+  const activeClause = includeInactive ? '' : " AND status = 'active'";
+  const [variants] = await pool.query<RowDataPacket[]>(`SELECT id, menu_item_id AS itemId, name, price_delta AS priceDelta, status, sort_order AS sortOrder FROM menu_item_variants WHERE menu_item_id IN (${marks})${activeClause} ORDER BY sort_order, name`, ids);
+  const [groups] = await pool.query<RowDataPacket[]>(`SELECT id, menu_item_id AS itemId, name, min_selections AS minSelections, max_selections AS maxSelections, status, sort_order AS sortOrder FROM menu_item_addon_groups WHERE menu_item_id IN (${marks})${activeClause} ORDER BY sort_order, name`, ids);
+  const groupIds = groups.map((g) => String(g.id));
+  const [addons] = groupIds.length ? await pool.query<RowDataPacket[]>(`SELECT id, group_id AS groupId, name, price_delta AS priceDelta, status, sort_order AS sortOrder FROM menu_item_addons WHERE group_id IN (${groupIds.map(() => '?').join(',')})${activeClause} ORDER BY sort_order, name`, groupIds) : [[] as RowDataPacket[], []];
+  const addonMap = new Map<string, RowDataPacket[]>();
+  for (const addon of addons) addonMap.set(String(addon.groupId), [...(addonMap.get(String(addon.groupId)) ?? []), addon]);
+  const groupMap = new Map<string, RowDataPacket[]>();
+  for (const group of groups) groupMap.set(String(group.itemId), [...(groupMap.get(String(group.itemId)) ?? []), { ...group, addons: addonMap.get(String(group.id)) ?? [] }]);
+  const variantMap = new Map<string, RowDataPacket[]>();
+  for (const variant of variants) variantMap.set(String(variant.itemId), [...(variantMap.get(String(variant.itemId)) ?? []), variant]);
+  for (const category of result) for (const item of category.items) Object.assign(item, { variants: variantMap.get(item.id) ?? [], addonGroups: groupMap.get(item.id) ?? [] });
+  return result;
+}
+
+export async function saveItemOptions(restaurantId: string, itemId: string, userId: string, input: {
+  variants: Array<{ id?: string; name: string; priceDelta: number; status: 'active' | 'inactive'; sortOrder: number }>;
+  addonGroups: Array<{ id?: string; name: string; minSelections: number; maxSelections: number; status: 'active' | 'inactive'; sortOrder: number; addons: Array<{ id?: string; name: string; priceDelta: number; status: 'active' | 'inactive'; sortOrder: number }> }>;
+}) {
+  await assertRestaurantOwnership(restaurantId, userId);
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [found] = await connection.query<RowDataPacket[]>('SELECT id, base_price AS basePrice FROM menu_items WHERE id = ? AND restaurant_id = ? FOR UPDATE', [itemId, restaurantId]);
+    if (!found.length) throw new AppError(404, 'Menu item not found');
+    const checkPrice = (delta: number) => { if (Math.round(Number(found[0].basePrice) * 100) + Math.round(delta * 100) < 0) throw new AppError(400, 'Variant price cannot be below zero'); };
+    const keepVariants: string[] = [];
+    for (const v of input.variants) {
+      checkPrice(v.priceDelta); const id = v.id ?? crypto.randomUUID(); keepVariants.push(id);
+      await connection.query(`INSERT INTO menu_item_variants (id, menu_item_id, name, price_delta, status, sort_order) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), price_delta=VALUES(price_delta), status=VALUES(status), sort_order=VALUES(sort_order)`, [id,itemId,v.name,v.priceDelta,v.status,v.sortOrder]);
+    }
+    if (keepVariants.length) await connection.query(`UPDATE menu_item_variants SET status='inactive' WHERE menu_item_id=? AND id NOT IN (${keepVariants.map(()=>'?').join(',')})`, [itemId,...keepVariants]);
+    else await connection.query("UPDATE menu_item_variants SET status='inactive' WHERE menu_item_id=?", [itemId]);
+    const keepGroups: string[] = [];
+    for (const g of input.addonGroups) {
+      const groupId = g.id ?? crypto.randomUUID(); keepGroups.push(groupId);
+      await connection.query(`INSERT INTO menu_item_addon_groups (id, menu_item_id, name, min_selections, max_selections, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), min_selections=VALUES(min_selections), max_selections=VALUES(max_selections), status=VALUES(status), sort_order=VALUES(sort_order)`, [groupId,itemId,g.name,g.minSelections,g.maxSelections,g.status,g.sortOrder]);
+      const keepAddons: string[] = [];
+      for (const a of g.addons) { const addonId=a.id??crypto.randomUUID(); keepAddons.push(addonId); await connection.query(`INSERT INTO menu_item_addons (id, group_id, name, price_delta, status, sort_order) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), price_delta=VALUES(price_delta), status=VALUES(status), sort_order=VALUES(sort_order)`, [addonId,groupId,a.name,a.priceDelta,a.status,a.sortOrder]); }
+      if (keepAddons.length) await connection.query(`UPDATE menu_item_addons SET status='inactive' WHERE group_id=? AND id NOT IN (${keepAddons.map(()=>'?').join(',')})`, [groupId,...keepAddons]); else await connection.query("UPDATE menu_item_addons SET status='inactive' WHERE group_id=?", [groupId]);
+    }
+    if (keepGroups.length) await connection.query(`UPDATE menu_item_addon_groups SET status='inactive' WHERE menu_item_id=? AND id NOT IN (${keepGroups.map(()=>'?').join(',')})`, [itemId,...keepGroups]); else await connection.query("UPDATE menu_item_addon_groups SET status='inactive' WHERE menu_item_id=?", [itemId]);
+    await connection.commit();
+    return { itemId, ...await getMenu(restaurantId, true).then((cats) => ({ item: cats.flatMap((c) => c.items).find((i) => i.id === itemId) })) };
+  } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
 }
 
 export async function getManagementMenu(
