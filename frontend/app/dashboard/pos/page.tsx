@@ -8,6 +8,7 @@ import { useAuth } from '../../../src/auth/AuthContext';
 import { api, getErrorMessage } from '../../../src/api/client';
 
 type Branch = { id: string; restaurantId: string; restaurantName: string; name: string; code: string; role: string };
+type Customer = { id: string; name: string; phone: string | null; email: string | null };
 type DiningTable = { id: string; tableNumber: string; areaName: string; capacity: number; status: string };
 type MenuItem = { id: string; name: string; description: string | null; price: number; taxRate: number; status?: string; variants?: Array<{id:string;name:string;priceDelta:number}>; addonGroups?: Array<{id:string;name:string;minSelections:number;maxSelections:number;addons:Array<{id:string;name:string;priceDelta:number}>}> };
 type MenuCategory = { id: string; name: string; items: MenuItem[] };
@@ -20,6 +21,8 @@ export default function PosPage() {
   const { user, loading: authLoading } = useAuth();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState('');
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customerId, setCustomerId] = useState('');
   const [tables, setTables] = useState<DiningTable[]>([]);
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [tableId, setTableId] = useState('');
@@ -35,6 +38,21 @@ export default function PosPage() {
   useEffect(() => {
     if (!authLoading && !user) router.replace('/login');
   }, [authLoading, user, router]);
+
+  useEffect(() => {
+    if (!branchId) {
+      setCustomers([]);
+      setCustomerId('');
+      return;
+    }
+    let active = true;
+    setCustomers([]);
+    setCustomerId('');
+    api.get<Customer[]>('/customers', { params: { branchId } })
+      .then(({ data }) => { if (active) setCustomers(data); })
+      .catch((err) => { if (active) setError(getErrorMessage(err)); });
+    return () => { active = false; };
+  }, [branchId]);
 
   useEffect(() => {
     if (authLoading || !user) return;
@@ -110,6 +128,7 @@ export default function PosPage() {
     try {
       const { data } = await api.post<CreatedOrder>('/orders/pos/dine-in', {
         branchId: branch.id,
+        customerId: customerId || undefined,
         tableId,
         items: selectedItems.map((item) => ({ menuItemId: item.id, quantity: quantities[item.id], ...(variants[item.id] ? { variantId: variants[item.id] } : {}), addonIds: addons[item.id] ?? [] })),
       });
@@ -238,6 +257,13 @@ export default function PosPage() {
                 <select required value={tableId} onChange={(event) => setTableId(event.target.value)} className="mt-1.5 w-full rounded-xl border border-[#e8e2da] bg-white px-3 py-3 text-sm">
                   <option value="">Choose an available table</option>
                   {availableTables.map((table) => <option key={table.id} value={table.id}>{table.tableNumber} · {table.areaName} · {table.capacity} seats</option>)}
+                </select>
+              </label>
+              <label className="mt-4 block text-sm font-medium">
+                Customer (optional)
+                <select value={customerId} onChange={(event) => setCustomerId(event.target.value)} className="mt-1.5 w-full rounded-xl border border-[#e8e2da] bg-white px-3 py-3 text-sm">
+                  <option value="">Walk-in customer</option>
+                  {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ''}</option>)}
                 </select>
               </label>
               {availableTables.length === 0 && !loading && <p className="mt-2 text-xs text-amber-700">No available tables in this branch.</p>}

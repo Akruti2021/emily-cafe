@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const createPosDineInOrderSchema = z.object({
   branchId: z.string().uuid('Invalid branch ID'),
+  customerId: z.string().uuid().optional(),
   tableId: z.string().uuid('Invalid table ID'),
   items: z.array(z.object({
     menuItemId: z.string().uuid('Invalid menu item ID'),

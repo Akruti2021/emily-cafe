@@ -42,7 +42,7 @@ const navItems = [
   { label: 'Menu Management', icon: UtensilsCrossed, href: '/menu' },
   { label: 'Analytics', icon: BarChart3, href: '#analytics' },
   { label: 'Order', icon: ShoppingBag, href: '#orders' },
-  { label: 'Customer', icon: Users, href: '#customers' },
+  { label: 'Customer', icon: Users, href: '/dashboard/customers' },
   { label: 'Sales', icon: TrendingUp, href: '#sales' },
   { label: 'Messages', icon: MessageSquare, badge: '12', href: '#messages' },
 ];

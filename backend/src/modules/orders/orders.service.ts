@@ -218,7 +218,7 @@ export async function createDineInOrder(input: {
 
 export async function createPosDineInOrder(
   userId: string,
-  input: { branchId: string; tableId: string; items: Array<{ menuItemId: string; quantity: number; variantId?: string; addonIds: string[] }> },
+  input: { branchId: string; tableId: string; customerId?: string; items: Array<{ menuItemId: string; quantity: number; variantId?: string; addonIds: string[] }> },
 ) {
   const connection = await pool.getConnection();
   try {
@@ -246,6 +246,14 @@ export async function createPosDineInOrder(
     if (!roleHasPermission(table.role, 'orders.create')) throw new AppError(403, 'Forbidden');
     if (table.status !== 'available') {
       throw new AppError(409, 'Choose an available table to start a new POS order');
+    }
+
+    if (input.customerId) {
+      const [customerRows] = await connection.query<Array<RowDataPacket & { id: string }>>(
+        "SELECT id FROM customers WHERE id = ? AND restaurant_id = ? AND status = 'active' LIMIT 1 FOR UPDATE",
+        [input.customerId, table.restaurantId],
+      );
+      if (!customerRows.length) throw new AppError(400, 'Selected customer is unavailable for this restaurant');
     }
 
     const menuItemIds = input.items.map((line) => line.menuItemId);
@@ -317,8 +325,8 @@ export async function createPosDineInOrder(
     const orderNumber = 'P' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(3).toString('hex').toUpperCase();
 
     await connection.query(
-      "INSERT INTO orders (id, restaurant_id, branch_id, table_id, order_number, order_type, status, subtotal, tax_total, discount_total, grand_total, created_by_id) VALUES (?, ?, ?, ?, ?, 'DINE_IN', 'PENDING', ?, ?, 0, ?, ?)",
-      [orderId, table.restaurantId, input.branchId, input.tableId, orderNumber, subtotal, taxTotal, grandTotal, userId],
+      "INSERT INTO orders (id, restaurant_id, branch_id, table_id, order_number, order_type, status, subtotal, tax_total, discount_total, grand_total, created_by_id, customer_id) VALUES (?, ?, ?, ?, ?, 'DINE_IN', 'PENDING', ?, ?, 0, ?, ?, ?)",
+      [orderId, table.restaurantId, input.branchId, input.tableId, orderNumber, subtotal, taxTotal, grandTotal, userId, input.customerId ?? null],
     );
     for (const line of orderLines) {
       await connection.query(

@@ -133,6 +133,23 @@ CREATE TABLE IF NOT EXISTS menu_items (
   INDEX idx_menu_category (category_id)
 );
 
+CREATE TABLE IF NOT EXISTS customers (
+  id VARCHAR(36) PRIMARY KEY,
+  restaurant_id VARCHAR(36) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  phone VARCHAR(32) NULL,
+  email VARCHAR(191) NULL,
+  notes TEXT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (restaurant_id) REFERENCES restaurants(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_customers_restaurant_email (restaurant_id, email),
+  UNIQUE KEY uq_customers_restaurant_id (restaurant_id, id),
+  INDEX idx_customers_restaurant_name (restaurant_id, name),
+  INDEX idx_customers_restaurant_phone (restaurant_id, phone)
+);
+
 -- 4. Orders & Order Items
 CREATE TABLE IF NOT EXISTS orders (
   id VARCHAR(36) PRIMARY KEY,
@@ -147,13 +164,16 @@ CREATE TABLE IF NOT EXISTS orders (
   discount_total DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
   grand_total DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
   created_by_id VARCHAR(36) NULL,
+  customer_id VARCHAR(36) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (restaurant_id) REFERENCES restaurants(id) ON DELETE CASCADE,
   FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE,
   FOREIGN KEY (created_by_id) REFERENCES users(id),
   FOREIGN KEY (table_id) REFERENCES restaurant_tables(id) ON DELETE SET NULL,
+  FOREIGN KEY (restaurant_id, customer_id) REFERENCES customers(restaurant_id, id) ON DELETE RESTRICT,
   UNIQUE KEY uq_branch_order (branch_id, order_number),
-  INDEX idx_orders_branch_created (branch_id, created_at DESC)
+  INDEX idx_orders_branch_created (branch_id, created_at DESC),
+  INDEX idx_orders_customer_created (customer_id, created_at)
 );
 
 CREATE TABLE IF NOT EXISTS order_items (

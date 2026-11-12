@@ -11,6 +11,7 @@ import { ordersRouter } from './modules/orders/orders.routes';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes';
 import { tablesRouter } from './modules/tables/tables.routes';
 import { kotRouter } from './modules/kitchen/kot.routes';
+import { customersRouter } from './modules/customers/customers.routes';
 
 export const app = express();
 
@@ -28,6 +29,7 @@ app.use('/api/orders', ordersRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/tables', tablesRouter);
 app.use('/api/kots', kotRouter);
+app.use('/api/customers', customersRouter);
 
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(errorHandler);
