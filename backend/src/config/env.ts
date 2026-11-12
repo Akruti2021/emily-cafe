@@ -10,7 +10,7 @@ export const env = z
     DB_HOST: z.string().default('localhost'),
     DB_USER: z.string().default('root'),
     DB_PASSWORD: z.string().default(''),
-    DB_NAME: z.string().default('emily_cafe_db'),
+    DB_NAME: z.string().default('defaultdb'),
     DB_PORT: z.coerce.number().default(3306),
     DB_SSL: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
     DB_SSL_CA: z.string().optional(),

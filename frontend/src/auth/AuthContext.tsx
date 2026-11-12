@@ -1,8 +1,9 @@
 'use client';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, refreshAccessToken, setAccessToken, setSessionExpiredHandler } from '../api/client';
-
+import { usePathname } from 'next/navigation';
 export interface User {
+
   id: string;
   name: string;
   email: string;
@@ -25,9 +26,12 @@ interface AuthContextValue {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
+const PUBLIC_ROUTES = ['/', '/login', '/register-restaurant', '/branch-details'];  // Add any other public routes here
+
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -38,6 +42,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setSessionExpiredHandler(() => setUser(null));
+    if (PUBLIC_ROUTES.includes(pathname)) {
+      setLoading(false);
+      return;
+    }
     let active = true;
 
     (async () => {
