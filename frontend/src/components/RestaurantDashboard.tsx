@@ -32,11 +32,13 @@ import {
   Layers,
   TableProperties,
   QrCode,
+  Receipt,
 } from 'lucide-react';
 
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
   { label: 'POS', icon: ShoppingBag, href: '/dashboard/pos' },
+  { label: 'Billing & Payments', icon: Receipt, href: '/dashboard/billing' },
   { label: 'Kitchen', icon: UtensilsCrossed, href: '/dashboard/kitchen' },
   { label: 'Team access', icon: Users, href: '/dashboard/team' },
   { label: 'Menu Management', icon: UtensilsCrossed, href: '/menu' },

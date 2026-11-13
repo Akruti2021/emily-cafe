@@ -22,16 +22,20 @@ export type BranchPermission =
   | 'kots.view'
   | 'kots.send'
   | 'kots.manage'
-  | 'members.manage';
+  | 'members.manage'
+  | 'billing.view'
+  | 'discounts.apply'
+  | 'payments.record'
+  | 'payments.refund';
 
 const permissionsByRole: Record<BranchRole, readonly BranchPermission[]> = {
-  OWNER: ['tables.view', 'tables.manage', 'tables.status', 'orders.view', 'orders.create', 'orders.manage', 'kots.view', 'kots.send', 'kots.manage', 'members.manage'],
-  BRANCH_MANAGER: ['tables.view', 'tables.manage', 'tables.status', 'orders.view', 'orders.create', 'orders.manage', 'kots.view', 'kots.send', 'kots.manage', 'members.manage'],
-  CASHIER: ['tables.view', 'orders.view', 'orders.create', 'orders.manage'],
-  WAITER: ['tables.view', 'orders.view', 'orders.create', 'orders.manage', 'kots.view', 'kots.send'],
+  OWNER: ['tables.view', 'tables.manage', 'tables.status', 'orders.view', 'orders.create', 'orders.manage', 'kots.view', 'kots.send', 'kots.manage', 'members.manage', 'billing.view', 'discounts.apply', 'payments.record', 'payments.refund'],
+  BRANCH_MANAGER: ['tables.view', 'tables.manage', 'tables.status', 'orders.view', 'orders.create', 'orders.manage', 'kots.view', 'kots.send', 'kots.manage', 'members.manage', 'billing.view', 'discounts.apply', 'payments.record', 'payments.refund'],
+  CASHIER: ['tables.view', 'orders.view', 'orders.create', 'orders.manage', 'billing.view', 'discounts.apply', 'payments.record'],
+  WAITER: ['tables.view', 'orders.view', 'orders.create', 'orders.manage', 'kots.view', 'kots.send', 'billing.view'],
   KITCHEN_STAFF: ['kots.view', 'kots.manage'],
   INVENTORY_MANAGER: [],
-  ACCOUNTANT: [],
+  ACCOUNTANT: ['billing.view'],
 };
 
 interface BranchAccessRow extends RowDataPacket {
