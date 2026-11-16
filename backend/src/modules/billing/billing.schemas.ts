@@ -35,3 +35,14 @@ export const refundPaymentSchema = z.object({
   reason: z.string().trim().min(3, 'Refund reason is required').max(500),
   referenceNumber: z.string().trim().max(100).optional(),
 });
+
+export const createRazorpayOrderSchema = z.object({
+  amount: z.number().positive(), // Amount in INR (supports full or split payments)
+});
+
+export const verifyRazorpayPaymentSchema = z.object({
+  razorpay_order_id: z.string().min(1),
+  razorpay_payment_id: z.string().min(1),
+  razorpay_signature: z.string().min(1),
+  idempotencyKey: z.string().uuid(),
+});

@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { requireAuth } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { asyncHandler } from '../../utils/asyncHandler';
-import { calculateBillSchema, recordPaymentsSchema, refundPaymentSchema } from './billing.schemas';
+import {
+  calculateBillSchema,
+  createRazorpayOrderSchema,
+  recordPaymentsSchema,
+  refundPaymentSchema,
+  verifyRazorpayPaymentSchema,
+} from './billing.schemas';
 import * as billingSvc from './billing.service';
 
 export const billingRouter = Router();
@@ -36,6 +42,30 @@ billingRouter.post(
     const orderId = z.string().uuid().safeParse(req.params.orderId);
     if (!orderId.success) return res.status(400).json({ error: 'Invalid order ID' });
     res.status(201).json(await billingSvc.recordOrderPayments(req.user!.id, orderId.data, req.body));
+  }),
+);
+
+billingRouter.post(
+  '/orders/:orderId/razorpay/create-order',
+  validate(createRazorpayOrderSchema),
+  asyncHandler(async (req, res) => {
+    const orderId = z.string().uuid().safeParse(req.params.orderId);
+    if (!orderId.success) return res.status(400).json({ error: 'Invalid order ID' });
+    res.status(201).json(
+      await billingSvc.createRazorpayOrder(req.user!.id, orderId.data, req.body.amount),
+    );
+  }),
+);
+
+billingRouter.post(
+  '/orders/:orderId/razorpay/verify',
+  validate(verifyRazorpayPaymentSchema),
+  asyncHandler(async (req, res) => {
+    const orderId = z.string().uuid().safeParse(req.params.orderId);
+    if (!orderId.success) return res.status(400).json({ error: 'Invalid order ID' });
+    res.status(201).json(
+      await billingSvc.verifyAndRecordRazorpayPayment(req.user!.id, orderId.data, req.body),
+    );
   }),
 );
 

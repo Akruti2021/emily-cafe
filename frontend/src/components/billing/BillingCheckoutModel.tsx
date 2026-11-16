@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { billingApi, type PaymentMethod, type SplitPaymentInput } from '../../api/billing';
+import billingApi, { type PaymentMethod, type SplitPaymentInput } from '../../api/billing';
 
 interface BillingCheckoutModalProps {
   orderId: string;
@@ -53,6 +53,20 @@ interface BillingState {
   invoice: { id: string; invoiceNumber: string; issuedAt: string } | null;
 }
 
+function loadRazorpayScript(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (typeof window !== 'undefined' && (window as any).Razorpay) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 export function BillingCheckoutModal({
   orderId,
   userRole = 'OWNER',
@@ -81,7 +95,7 @@ export function BillingCheckoutModal({
   // Refund Controls
   const [refundingPaymentId, setRefundingPaymentId] = useState<string | null>(null);
   const [refundAmount, setRefundAmount] = useState<number>(0);
-  const [refundMethod, setRefundMethod] = useState<PaymentMethod>('CASH');
+  const [refundMethod, setRefundMethod] = useState<'CASH' | 'CARD' | 'UPI'>('CASH');
   const [refundReason, setRefundReason] = useState<string>('');
 
   // Invoice Preview
@@ -149,11 +163,11 @@ export function BillingCheckoutModal({
     if (mode === 'FULL') {
       setSplitRows([{ paymentMethod: 'CASH', amount: bal }]);
     } else if (mode === 'PARTIAL') {
-      setSplitRows([{ paymentMethod: 'UPI', amount: 0 }]);
+      setSplitRows([{ paymentMethod: 'RAZORPAY', amount: 0 }]);
     } else {
       setSplitRows([
         { paymentMethod: 'CASH', amount: 0 },
-        { paymentMethod: 'UPI', amount: 0 },
+        { paymentMethod: 'RAZORPAY', amount: 0 },
       ]);
     }
   };
@@ -162,40 +176,119 @@ export function BillingCheckoutModal({
     setSplitRows((prev) => prev.map((row, idx) => (idx === index ? { ...row, ...patch } : row)));
   };
 
+  const openRazorpayGateway = (razorpayAmount: number): Promise<BillingState> => {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const sdkReady = await loadRazorpayScript();
+        if (!sdkReady) {
+          reject(new Error('Failed to load Razorpay Checkout SDK. Check your internet connection.'));
+          return;
+        }
+
+        const rzpOrder = await billingApi.createRazorpayOrder(orderId, razorpayAmount);
+        const idempotencyKey = crypto.randomUUID();
+
+        const options = {
+          key: rzpOrder.keyId || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+          amount: rzpOrder.amountPaise,
+          currency: rzpOrder.currency,
+          name: 'Emily Cafe',
+          description: `Order #${data?.order.orderNumber ?? ''}`,
+          order_id: rzpOrder.razorpayOrderId,
+          handler: async (response: {
+            razorpay_order_id: string;
+            razorpay_payment_id: string;
+            razorpay_signature: string;
+          }) => {
+            try {
+              const verifiedBilling: BillingState = await billingApi.verifyRazorpayPayment(orderId, {
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                idempotencyKey,
+              });
+              resolve(verifiedBilling);
+            } catch (verifyErr) {
+              reject(verifyErr);
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              reject(new Error('Razorpay checkout was closed before payment completion.'));
+            },
+          },
+          theme: {
+            color: '#d97706',
+          },
+        };
+
+        const rzp = new (window as any).Razorpay(options);
+        rzp.on('payment.failed', (failureResp: any) => {
+          reject(
+            new Error(failureResp?.error?.description || 'Razorpay payment failed. Please try again.'),
+          );
+        });
+        rzp.open();
+      } catch (err) {
+        reject(err);
+      }
+    });
+  };
+
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!data) return;
 
-    const validPayments = splitRows
-      .filter((r) => Number(r.amount) > 0)
+    const validRows = splitRows.filter((r) => Number(r.amount) > 0);
+    if (validRows.length === 0) {
+      setError('Enter a payment amount greater than 0');
+      return;
+    }
+
+    const razorpayRows = validRows.filter((r) => r.paymentMethod === 'RAZORPAY');
+    if (razorpayRows.length > 1) {
+      setError('Use a single Razorpay row per checkout submission');
+      return;
+    }
+
+    const manualPayments = validRows
+      .filter((r) => r.paymentMethod !== 'RAZORPAY')
       .map((r) => ({
-        paymentMethod: r.paymentMethod,
+        paymentMethod: r.paymentMethod as 'CASH' | 'CARD' | 'UPI',
         amount: Number(r.amount),
         tenderedAmount:
           r.paymentMethod === 'CASH' && r.tenderedAmount ? Number(r.tenderedAmount) : undefined,
         referenceNumber: r.referenceNumber?.trim() || undefined,
       }));
 
-    if (validPayments.length === 0) {
-      setError('Enter a payment amount greater than 0');
-      return;
-    }
-
     try {
       setSubmitting(true);
       setError(null);
-      const idempotencyKey = crypto.randomUUID();
-      const updated: BillingState = await billingApi.recordPayments(
-        orderId,
-        idempotencyKey,
-        validPayments,
-      );
-      setData(updated);
-      setSplitRows([{ paymentMethod: 'CASH', amount: updated.order.balanceDue }]);
+      setSuccessMsg(null);
+
+      let latestBilling: BillingState = data;
+
+      // 1. Record any offline/manual tenders (Cash / Card / UPI) first
+      if (manualPayments.length > 0) {
+        latestBilling = await billingApi.recordPayments(
+          orderId,
+          crypto.randomUUID(),
+          manualPayments,
+        );
+        setData(latestBilling);
+      }
+
+      // 2. Process Razorpay gateway payment if selected
+      if (razorpayRows.length === 1) {
+        latestBilling = await openRazorpayGateway(Number(razorpayRows[0].amount));
+        setData(latestBilling);
+      }
+
+      setSplitRows([{ paymentMethod: 'CASH', amount: latestBilling.order.balanceDue }]);
       setSuccessMsg('Payment recorded successfully');
       onUpdated?.();
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Payment failed');
+      setError(err?.response?.data?.error || err?.message || 'Payment failed');
     } finally {
       setSubmitting(false);
     }
@@ -235,6 +328,10 @@ export function BillingCheckoutModal({
       setSubmitting(false);
     }
   };
+
+  const hasRazorpayRow = splitRows.some(
+    (r) => r.paymentMethod === 'RAZORPAY' && Number(r.amount) > 0,
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -357,7 +454,7 @@ export function BillingCheckoutModal({
                   {data.order.discountTotal > 0 && (
                     <div className="flex justify-between text-green-700">
                       <span>Discount</span>
-                      <span>- ₹{data.order.discountTotal.toFixed(2)}</span>
+                      <span>-₹{data.order.discountTotal.toFixed(2)}</span>
                     </div>
                   )}
                   {data.order.serviceChargeTotal > 0 && (
@@ -440,7 +537,7 @@ export function BillingCheckoutModal({
                             : 0;
 
                         return (
-                          <div key={index} className="rounded-lg border bg-gray-50 p-3 space-y-2">
+                          <div key={index} className="space-y-2 rounded-lg border bg-gray-50 p-3">
                             <div className="flex gap-2">
                               <select
                                 value={row.paymentMethod}
@@ -452,8 +549,9 @@ export function BillingCheckoutModal({
                                 className="rounded border bg-white px-2 py-1.5 text-sm font-medium"
                               >
                                 <option value="CASH">Cash</option>
-                                <option value="UPI">UPI</option>
-                                <option value="CARD">Card</option>
+                                <option value="RAZORPAY">Razorpay (Online UPI / Card)</option>
+                                <option value="UPI">UPI (Manual UTR)</option>
+                                <option value="CARD">Card (POS Swipe)</option>
                               </select>
 
                               <input
@@ -506,6 +604,11 @@ export function BillingCheckoutModal({
                                   </span>
                                 )}
                               </div>
+                            ) : row.paymentMethod === 'RAZORPAY' ? (
+                              <p className="text-xs text-indigo-700">
+                                Opens Razorpay Checkout for ₹{Number(row.amount || 0).toFixed(2)} and
+                                auto-verifies signature on completion.
+                              </p>
                             ) : (
                               <input
                                 type="text"
@@ -530,7 +633,7 @@ export function BillingCheckoutModal({
                       <button
                         type="button"
                         onClick={() =>
-                          setSplitRows((prev) => [...prev, { paymentMethod: 'CARD', amount: 0 }])
+                          setSplitRows((prev) => [...prev, { paymentMethod: 'RAZORPAY', amount: 0 }])
                         }
                         className="text-xs font-semibold text-amber-700 hover:underline"
                       >
@@ -541,9 +644,17 @@ export function BillingCheckoutModal({
                     <button
                       type="submit"
                       disabled={submitting}
-                      className="w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                      className={`w-full rounded-lg py-2.5 text-sm font-semibold text-white disabled:opacity-50 ${
+                        hasRazorpayRow
+                          ? 'bg-indigo-600 hover:bg-indigo-700'
+                          : 'bg-emerald-600 hover:bg-emerald-700'
+                      }`}
                     >
-                      {submitting ? 'Processing Payment...' : 'Confirm & Record Payment'}
+                      {submitting
+                        ? 'Processing Payment...'
+                        : hasRazorpayRow
+                        ? 'Proceed to Razorpay Checkout'
+                        : 'Confirm & Record Payment'}
                     </button>
                   </form>
                 )}
@@ -595,7 +706,9 @@ export function BillingCheckoutModal({
                                   onClick={() => {
                                     setRefundingPaymentId(p.id);
                                     setRefundAmount(p.amount);
-                                    setRefundMethod(p.paymentMethod);
+                                    setRefundMethod(
+                                      p.paymentMethod === 'RAZORPAY' ? 'UPI' : p.paymentMethod,
+                                    );
                                   }}
                                   className="text-xs font-semibold text-red-600 hover:underline"
                                 >
@@ -612,7 +725,7 @@ export function BillingCheckoutModal({
                                   <select
                                     value={refundMethod}
                                     onChange={(e) =>
-                                      setRefundMethod(e.target.value as PaymentMethod)
+                                      setRefundMethod(e.target.value as 'CASH' | 'CARD' | 'UPI')
                                     }
                                     className="rounded border bg-white px-2 py-1"
                                   >
@@ -724,7 +837,7 @@ export function BillingCheckoutModal({
                     </tbody>
                   </table>
 
-                  <div className="mt-3 border-t pt-2 text-right text-xs space-y-1">
+                  <div className="mt-3 space-y-1 border-t pt-2 text-right text-xs">
                     <p>Subtotal: ₹{data.order.subtotal.toFixed(2)}</p>
                     {data.order.discountTotal > 0 && (
                       <p>Discount: -₹{data.order.discountTotal.toFixed(2)}</p>

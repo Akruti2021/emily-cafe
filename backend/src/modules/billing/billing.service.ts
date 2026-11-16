@@ -1,6 +1,7 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { pool } from '../../config/db';
+import { razorpay } from '../../config/razorpay';
 import { AppError } from '../../middleware/errorhandler';
 import { roleHasPermission, type BranchPermission, type BranchRole } from '../organization/branch-access';
 
@@ -119,7 +120,8 @@ export async function getOrderBilling(userId: string, orderId: string) {
     const [payments] = await connection.query<RowDataPacket[]>(
       `SELECT p.id, p.payment_method AS paymentMethod, p.amount,
               p.tendered_amount AS tenderedAmount, p.change_returned AS changeReturned,
-              p.reference_number AS referenceNumber, p.status, p.notes,
+              p.reference_number AS referenceNumber, p.gateway_order_id AS gatewayOrderId,
+              p.gateway_payment_id AS gatewayPaymentId, p.status, p.notes,
               p.created_at AS createdAt, u.name AS recordedByName
          FROM order_payments p
          JOIN users u ON u.id = p.recorded_by_id
@@ -424,6 +426,164 @@ export async function recordOrderPayments(
     }
 
     const newPaidPaise = toPaise(order.amountPaid) + batchTotalPaise;
+    const grandTotalPaise = toPaise(order.grandTotal);
+    const newBalancePaise = Math.max(0, grandTotalPaise - newPaidPaise);
+    const newPaymentStatus = newBalancePaise === 0 ? 'PAID' : 'PARTIALLY_PAID';
+
+    await connection.query(
+      `UPDATE orders SET amount_paid = ?, balance_due = ?, payment_status = ? WHERE id = ?`,
+      [fromPaise(newPaidPaise), fromPaise(newBalancePaise), newPaymentStatus, orderId],
+    );
+
+    await connection.commit();
+    return getOrderBilling(userId, orderId);
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+export async function createRazorpayOrder(
+  userId: string,
+  orderId: string,
+  requestedAmountInr: number,
+) {
+  const connection = await pool.getConnection();
+  try {
+    const order = await lockOrderWithPermission(connection, userId, orderId, 'payments.record');
+
+    if (order.status === 'CANCELLED') {
+      throw new AppError(409, 'Cannot initiate payment for a cancelled order');
+    }
+
+    const balancePaise = toPaise(order.balanceDue);
+    if (balancePaise <= 0) {
+      throw new AppError(409, 'Order is already fully paid');
+    }
+
+    const requestedPaise = toPaise(requestedAmountInr);
+    if (requestedPaise <= 0 || requestedPaise > balancePaise) {
+      throw new AppError(400, `Invalid Razorpay amount. Max payable is ${fromPaise(balancePaise)}`);
+    }
+
+    const rzpOrder = await razorpay.orders.create({
+      amount: requestedPaise,
+      currency: 'INR',
+      receipt: `ord_${order.orderNumber}_${Date.now()}`.slice(0, 40),
+      notes: {
+        emily_order_id: order.id,
+        branch_id: order.branchId,
+        restaurant_id: order.restaurantId,
+      },
+    });
+
+    return {
+      razorpayOrderId: rzpOrder.id,
+      amountPaise: rzpOrder.amount,
+      currency: rzpOrder.currency,
+      keyId: process.env.RAZORPAY_KEY_ID,
+    };
+  } finally {
+    connection.release();
+  }
+}
+
+export async function verifyAndRecordRazorpayPayment(
+  userId: string,
+  orderId: string,
+  input: {
+    razorpay_order_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+    idempotencyKey: string;
+  },
+) {
+  // 1. Verify HMAC SHA-256 signature using RAZORPAY_KEY_SECRET
+  const expectedSignature = crypto
+    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || '')
+    .update(`${input.razorpay_order_id}|${input.razorpay_payment_id}`)
+    .digest('hex');
+
+  if (expectedSignature !== input.razorpay_signature) {
+    throw new AppError(400, 'Invalid Razorpay payment signature');
+  }
+
+  // 2. Fetch authoritative captured payment details from Razorpay API
+  const rzpPayment = await razorpay.payments.fetch(input.razorpay_payment_id);
+  if (rzpPayment.order_id !== input.razorpay_order_id) {
+    throw new AppError(400, 'Payment does not belong to this Razorpay order');
+  }
+  if (rzpPayment.status !== 'captured' && rzpPayment.status !== 'authorized') {
+    throw new AppError(400, `Payment not completed (status: ${rzpPayment.status})`);
+  }
+
+  const paidPaise = Number(rzpPayment.amount);
+
+  // 3. Record payment inside a locked transaction matching your UUID schema
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const order = await lockOrderWithPermission(connection, userId, orderId, 'payments.record');
+
+    // Idempotency check by idempotency_key or gateway_payment_id
+    const [existing] = await connection.query<RowDataPacket[]>(
+      `SELECT id FROM order_payments
+        WHERE branch_id = ? AND (idempotency_key = ? OR gateway_payment_id = ?)
+        LIMIT 1`,
+      [order.branchId, input.idempotencyKey, input.razorpay_payment_id],
+    );
+    if (existing.length > 0) {
+      await connection.commit();
+      return getOrderBilling(userId, orderId);
+    }
+
+    const currentBalancePaise = toPaise(order.balanceDue);
+    if (paidPaise > currentBalancePaise) {
+      throw new AppError(400, `Razorpay paid amount (${fromPaise(paidPaise)}) exceeds balance due (${fromPaise(currentBalancePaise)})`);
+    }
+
+    const paymentId = crypto.randomUUID();
+    await connection.query(
+      `INSERT INTO order_payments
+         (id, restaurant_id, branch_id, order_id, payment_method, amount,
+          tendered_amount, change_returned, reference_number,
+          gateway_order_id, gateway_payment_id, gateway_signature,
+          status, idempotency_key, notes, recorded_by_id)
+       VALUES (?, ?, ?, ?, 'RAZORPAY', ?, NULL, 0.00, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?)`,
+      [
+        paymentId,
+        order.restaurantId,
+        order.branchId,
+        orderId,
+        fromPaise(paidPaise),
+        input.razorpay_payment_id,
+        input.razorpay_order_id,
+        input.razorpay_payment_id,
+        input.razorpay_signature,
+        input.idempotencyKey,
+        `Razorpay (${rzpPayment.method ?? 'online'})`,
+        userId,
+      ],
+    );
+
+    await writeAuditLog(connection, {
+      restaurantId: order.restaurantId,
+      branchId: order.branchId,
+      entityType: 'PAYMENT_RECORDED',
+      entityId: paymentId,
+      actorUserId: userId,
+      beforeState: null,
+      afterState: {
+        orderId,
+        method: 'RAZORPAY',
+        amount: fromPaise(paidPaise),
+        gatewayPaymentId: input.razorpay_payment_id,
+      },
+    });
+
+    const newPaidPaise = toPaise(order.amountPaid) + paidPaise;
     const grandTotalPaise = toPaise(order.grandTotal);
     const newBalancePaise = Math.max(0, grandTotalPaise - newPaidPaise);
     const newPaymentStatus = newBalancePaise === 0 ? 'PAID' : 'PARTIALLY_PAID';
