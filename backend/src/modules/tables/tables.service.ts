@@ -207,9 +207,9 @@ export async function createRestaurantTable(
 
   const id = crypto.randomUUID();
   await pool.query(
-    `INSERT INTO restaurant_tables (id, dining_area_id, table_number, capacity)
-     VALUES (?, ?, ?, ?)`,
-    [id, input.areaId, input.tableNumber, input.capacity],
+    `INSERT INTO restaurant_tables (id, branch_id, dining_area_id, table_number, capacity)
+     VALUES (?, ?, ?, ?, ?)`,
+    [id, branchId, input.areaId, input.tableNumber, input.capacity],
   );
 
   const created = await listRestaurantTables(branchId, userId);

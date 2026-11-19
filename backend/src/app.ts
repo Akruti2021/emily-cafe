@@ -12,6 +12,7 @@ import { dashboardRouter } from './modules/dashboard/dashboard.routes';
 import { tablesRouter } from './modules/tables/tables.routes';
 import { kotRouter } from './modules/kitchen/kot.routes';
 import { customersRouter } from './modules/customers/customers.routes';
+import { billingRouter } from './modules/billing/billing.routes';
 
 export const app = express();
 
@@ -30,6 +31,6 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/tables', tablesRouter);
 app.use('/api/kots', kotRouter);
 app.use('/api/customers', customersRouter);
-
+app.use('/api/billing', billingRouter);
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(errorHandler);
